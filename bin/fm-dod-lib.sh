@@ -140,6 +140,21 @@ fm_forge_valid_for_mode() {  # <forge> <mode> <caller>
   return 0
 }
 
+# Closed-set gate for the worker workflow dimension (standard | pstack), shared
+# by every workflow-aware caller the same way fm_forge_valid_for_mode is, so a
+# caller cannot render a half-formed contract. bin/fm-pstack.sh owns what a
+# pstack workflow resolves from and bin/fm-pstack.sh's `template` owns the
+# proof format; this gate only rejects values outside the vocabulary.
+fm_workflow_valid() {  # <standard|pstack> <caller>
+  case "$1" in
+    standard|pstack) ;;
+    *)
+      echo "error: $2: unknown workflow '$1' (expected standard or pstack)" >&2
+      return 1
+      ;;
+  esac
+}
+
 fm_ship_rule_one() {  # <no-mistakes|direct-PR|local-only> <task-id> [branch] [<forge>]
   local mode=$1 id=$2 forge=${4:-none}
   local branch=${3:-fm/$id}
@@ -456,6 +471,85 @@ EOF
       echo "error: fm_dod_block: unknown delivery mode '$mode'" >&2
       return 1 ;;
   esac
+}
+
+# The pstack worker workflow's launch-brief overlay, rendered by the caller
+# directly after the source brief's role and task sections. It names the exact
+# entry skill and the local path it is loaded from, so a worker never guesses
+# either. The plugin loads only at launch (it is passed on the worker's argv),
+# which is why a pstack task that loses its window relaunches rather than
+# re-loads; bin/fm-control.sh and bin/fm-promote.sh own that consequence.
+fm_pstack_entry_overlay() {  # <entry> <plugin-dir>
+  cat <<EOF
+
+# pstack entry overlay
+This task runs the pstack worker workflow, so load the entry skill now, before any task work, and keep it as your main mode for the whole task: invoke the Skill tool with exactly \`$1\`, loaded from \`$2\`.
+The Definition of done's \`# Worker workflow\` section tells you what the workflow owns for this task.
+If the entry skill is missing or refuses to load, do not approximate the workflow: report the blocker it names and stop.
+EOF
+}
+
+# The pstack worker workflow's obligations block, rendered inside the ship
+# contract (bin/fm-brief.sh inserts it before the Definition of done;
+# bin/fm-promote.sh renders it inside the promotion contract). This file owns
+# the worker-facing text so a briefed worker and a promoted worker receive the
+# same one. The first heading body line is the machine-readable
+# `Worker workflow: pstack` marker bin/fm-spawn.sh reads back from the source
+# brief, so it must stay spelled exactly that way.
+# pstack composes with the three modes that can ship and is refused on
+# forge=gerrit (v1 scope): the workflow's obligations describe publishing
+# through a pull request or a ready worktree, not a review server.
+# The caller supplies the contract paths so the exact template and proof-check
+# commands are spelled out for the worker; bin/fm-pstack.sh's header owns the
+# proof format those commands read and write.
+fm_pstack_workflow_block() {  # <mode> <id> <branch> <forge> <data> <home> <root>
+  local mode=$1 id=$2 branch=$3 forge=$4 data=$5 home=$6 root=$7
+  case "$mode" in
+    no-mistakes|direct-PR|local-only) ;;
+    *)
+      echo "error: fm_pstack_workflow_block: unknown delivery mode '$mode'" >&2
+      return 1
+      ;;
+  esac
+  if [ "$forge" = gerrit ]; then
+    echo "error: fm_pstack_workflow_block: workflow=pstack cannot ship forge=gerrit - the pstack workflow's obligations assume a pull request or a ready worktree, not a review server" >&2
+    return 1
+  fi
+  cat <<'EOF'
+# Worker workflow
+Worker workflow: pstack
+EOF
+  cat <<EOF
+
+This task runs the pstack worker workflow: you own investigation, implementation, direct proof, and the outer validation lifecycle for this change, and no other agent does.
+Start pstack main mode now, before any task work, using the entry the launch overlay names, and keep it as your main mode until the task ends; pick the proportionate pstack playbook for a change of this size.
+Work from the recorded state of the repository and its verification before changing anything.
+Reproduce the failing behavior or establish the baseline before you change anything, and never call successful compilation reproduction.
+Investigate and design inside this workflow; raise every authority decision - product choices, destructive actions, anything above your implementation authority - with firstmate as a \`needs-decision\` status under rule 6, and stop.
+You may run bounded in-session helper agents for sub-steps inside this worktree only, but you inspect all of their output yourself and you own every claim you make: an assistant's self-report is never proof, and delegating the task itself is still forbidden by the worker role contract above.
+Prove the change on the real surface it ships on, run the adjacent and type and lint and build checks around it, then review your complete diff yourself, adversarially, before you report.
+Then commit the exact proof candidate on your ship branch \`$branch\`, write the proof record with the exact command \`FM_HOME=$home $root/bin/fm-pstack.sh template $id\`, check that record with the exact command \`FM_HOME=$home $root/bin/fm-pstack.sh proof-check $id\`, and only after it passes append the Definition of done's handoff \`done:\` line and stop.
+The proof-check is the deterministic self-check of your record, not a substitute for the proof: it passing means the record is well-formed, so keep every proof section honest.
+EOF
+  cat <<'EOF'
+
+Your Firstmate contract overrides pstack wherever they disagree: never follow a pstack playbook step named opening, babysitting, shipping, autopilot, orchestrate, or worktree cleanup that would push, open or update a pull request, merge, land, or create or remove worktrees; never run `setup-pstack`; never edit user-global harness configuration; and never call the AskUserQuestion tool - decisions go through `needs-decision` here.
+EOF
+  if [ "$mode" = no-mistakes ]; then
+    cat <<'EOF'
+While validating, you drive no-mistakes yourself under the Definition of done's contract: you own every `axi run` and `axi respond` call, never hand-edit your work around a gate finding to satisfy it, never start a second run for this task, never pass `--yes` to either tool, and never push - the pipeline is the only publisher.
+When you must invalidate the run's work entirely, abort it with `no-mistakes axi abort`, confirm the finished state with `no-mistakes axi status`, follow `branch_sync.next_action` exactly, rebuild your candidate from the proof record's `base`, write a NEW proof record carrying the superseded candidate's commit sha in its `supersedes` field, re-append the handoff `done:` line, and stop - firstmate re-triggers validation through the gate.
+After the run's outcome arrives, fill the proof record's `## Pipeline outcome` section with the exact outcome label, the risk level if it printed one, every fix it made, any overrides or skips with your reasons, and what remains uncertain, before the Definition of done's ready line; report those same facts honestly in that ready report.
+EOF
+  else
+    cat <<'EOF'
+This mode runs no pipeline: fill the proof record's `## Pipeline outcome` section with the concrete result you shipped instead, meaning what landed and which checks you ran yourself.
+EOF
+  fi
+  cat <<'EOF'
+If the entry skill or the pstack plugin is missing or refuses to load, append `blocked [key=pstack-unavailable]: {what is missing}` to the status file and stop; do not approximate the workflow without it.
+Never address the captain anywhere in this work.
+EOF
 }
 
 # 0 when <sha> is contained in a ref under <namespace> in <repo>.

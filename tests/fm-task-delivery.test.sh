@@ -1135,6 +1135,73 @@ ROWS
   pass "fm-project-mode: only a malformed forge binding refuses; every other token keeps its old tolerance"
 }
 
+# The workflow dimension is a register-orthogonal project fact, queried with
+# --workflow like the forge. The token binds from its own shape wherever it
+# appears among the bracket tokens, defaults to standard when absent, and is
+# validated ONLY on the --workflow read path, so one registry typo cannot block
+# the default and --forge readers behind it.
+test_project_mode_workflow_token() {
+  local home out err status registry
+  home="$TMP_ROOT/workflow-token/home"
+  mkdir -p "$home/data"
+
+  # A valid token resolves through --workflow, in any token position, without
+  # touching the default or --forge outputs.
+  while IFS='|' read -r label registry expect flag; do
+    [ -n "$label" ] || continue
+    printf '%s\n' "$registry" > "$home/data/projects.md"
+    # shellcheck disable=SC2086 # An empty flag must expand to nothing.
+    out=$(FM_HOME="$home" "$PROJECT_MODE" $flag fp 2>/dev/null)
+    status=$?
+    [ "$status" -eq 0 ] || fail "$label: refused (status $status, got '$out')"
+    [ "$out" = "$expect" ] || fail "$label: expected '$expect', got '$out'"
+  done <<'ROWS'
+standard resolves explicitly|- fp [no-mistakes workflow=standard] - fixture (added 2026-01-01)|standard|--workflow
+pstack resolves explicitly|- fp [no-mistakes workflow=pstack] - fixture (added 2026-01-01)|pstack|--workflow
+pstack beside the forge|- fp [direct-PR forge=gerrit workflow=pstack] - fixture (added 2026-01-01)|pstack|--workflow
+pstack before yolo|- fp [direct-PR workflow=pstack +yolo] - fixture (added 2026-01-01)|pstack|--workflow
+pstack beside a branch prefix|- fp [direct-PR workflow=pstack branch=wb/] - fixture (added 2026-01-01)|pstack|--workflow
+no workflow token is standard|- fp [direct-PR +yolo] - fixture (added 2026-01-01)|standard|--workflow
+default output unchanged by the token|- fp [direct-PR workflow=pstack +yolo] - fixture (added 2026-01-01)|direct-PR on|
+forge output unchanged by the token|- fp [direct-PR forge=gerrit workflow=pstack] - fixture (added 2026-01-01)|gerrit|--forge
+ROWS
+
+  # An unregistered project or an absent registry defaults to standard, the
+  # same way --branch-prefix defaults the prefix.
+  rm -f "$home/data/projects.md"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --workflow fp 2>/dev/null)
+  [ "$out" = standard ] || fail "an absent registry did not default to standard (got '$out')"
+  printf '%s\n' '- fp [direct-PR] - fixture (added 2026-01-01)' > "$home/data/projects.md"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --workflow other 2>/dev/null)
+  [ "$out" = standard ] || fail "an unregistered project did not default to standard (got '$out')"
+
+  # A malformed workflow binding refuses ONLY under --workflow: the default
+  # "<mode> <yolo>" and --forge reads are unaffected.
+  while IFS='|' read -r label registry token errneedle; do
+    [ -n "$label" ] || continue
+    printf '%s\n' "$registry" > "$home/data/projects.md"
+    for flag in "" --forge; do
+      # shellcheck disable=SC2086 # An empty flag must expand to nothing.
+      out=$(FM_HOME="$home" "$PROJECT_MODE" $flag fp 2>/dev/null)
+      status=$?
+      [ "$status" -eq 0 ] || fail "$label: a malformed workflow token became a refusal${flag:+ under $flag} (status $status, got '$out')"
+    done
+    out=$(FM_HOME="$home" "$PROJECT_MODE" --workflow fp 2>/dev/null)
+    status=$?
+    [ "$status" -eq 3 ] || fail "$label: --workflow did not refuse the malformed token (status $status, got '$out')"
+    [ -z "$out" ] || fail "$label: a refused workflow bound a value ('$out')"
+    err=$(FM_HOME="$home" "$PROJECT_MODE" --workflow fp 2>&1 >/dev/null) || true
+    assert_contains "$err" "\"$token\"" "$label: the refusal did not name the value"
+    assert_contains "$err" "$errneedle" "$label: the refusal did not name the accepted tokens"
+    out=$(FM_HOME="$home" "$PROJECT_MODE" --branch-prefix fp 2>/dev/null)
+    [ "$out" = "fm/" ] || fail "$label: --branch-prefix was disturbed by the token (got '$out')"
+  done <<'ROWS'
+an unknown workflow value|- fp [no-mistakes workflow=kanban] - fixture (added 2026-01-01)|kanban|the accepted workflow tokens are workflow=standard and workflow=pstack
+an empty workflow value|- fp [no-mistakes workflow=] - fixture (added 2026-01-01)|workflow=|the accepted workflow tokens are workflow=standard and workflow=pstack
+ROWS
+  pass "fm-project-mode: the workflow token binds only through --workflow and defaults to standard"
+}
+
 # Yolo is inactive for the Gerrit forge on the captain's decision of 2026-09-15,
 # because a Code-Review+2 is a positive attributed claim that a named human
 # approved. Every path that could carry merge authority to such a project must
@@ -1627,6 +1694,7 @@ test_project_mode_matches_whole_multiword_names
 test_project_mode_maps_the_conditional_policy
 test_project_mode_binds_the_forge_orthogonally
 test_project_mode_refuses_only_a_malformed_forge_binding
+test_project_mode_workflow_token
 test_forge_gerrit_refuses_yolo
 test_forge_gerrit_changes_what_no_mistakes_means
 test_forge_gerrit_direct_pr_publishes_one_change

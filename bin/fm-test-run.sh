@@ -378,6 +378,7 @@ family_for_basename() {
     fm-quota-array-dispatch-live-e2e.test.sh|fm-send-secondmate-marker-herdr-e2e.test.sh|\
     fm-send-inbox-doorbell-live-e2e.test.sh|\
     fm-calm-claude-mod-plugin.test.sh|fm-calm-claude-mod-live-e2e.test.sh|\
+    fm-pstack-claude-live-e2e.test.sh|\
     fm-calm-pi-queue-retention-live-e2e.test.sh|\
     fm-herdr-submit-confirm-live-e2e.test.sh)
       printf '%s\n' live-harness-optin
@@ -387,6 +388,7 @@ family_for_basename() {
     fm-control.test.sh|fm-control-relaunch.test.sh|\
     fm-herdr-session-cleanup.test.sh|fm-send-resolve-key.test.sh|fm-send-strict.test.sh|\
     fm-send-inbox.test.sh|fm-spawn-batch.test.sh|\
+    fm-pstack.test.sh|fm-pstack-lifecycle.test.sh|\
     fm-spawn-dispatch-profile.test.sh|fm-claude-trust.test.sh|\
     fm-worker-account.test.sh|\
     fm-git-strip-ai-trailers.test.sh|\
@@ -1463,6 +1465,13 @@ families_for_changed_path() {
     bin/fm-backend.sh|bin/fm-backend-hometag-lib.sh)
       printf '%s\n' backend-dispatch
       printf '%s\n' real-herdr-gated
+      ;;
+    bin/fm-pstack.sh)
+      # The pstack core's portability proof runs in the backend-dispatch family
+      # (fm-pstack.test.sh), and its claude live E2E contract is opt-in.
+      printf '%s\n' backend-dispatch
+      printf '%s\n' live-harness-optin
+      printf '%s\n' "__script__:fm-pstack.test.sh"
       ;;
     bin/fm-agent-process-lib.sh)
       # The shared harness-process classifier feeds both the tmux and Herdr

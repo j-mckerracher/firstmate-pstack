@@ -382,6 +382,85 @@ test_pr_based_dod_draft_check_uses_gh_axi() {
   pass "PR-based DoD draft check uses gh-axi"
 }
 
+# --- pstack worker workflow contract (bin/fm-pstack.sh owns the proof format) ---
+
+test_workflow_valid_closed_set() {
+  assert_equals "0" "$(fm_workflow_valid standard gate >/dev/null 2>&1; echo $?)" \
+    "standard workflow was refused"
+  assert_equals "0" "$(fm_workflow_valid pstack gate >/dev/null 2>&1; echo $?)" \
+    "pstack workflow was refused"
+  out=$(fm_workflow_valid fan-out gate 2>&1)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "unknown workflow was not refused (exit $rc)"
+  assert_contains "$out" "error: gate: unknown workflow 'fan-out'" \
+    "unknown workflow refusal did not name the caller and value"
+  pass "fm_workflow_valid accepts only standard and pstack"
+}
+
+test_pstack_workflow_block_refuses_gerrit_and_unknown_mode() {
+  out=$(fm_pstack_workflow_block no-mistakes blk-x fm/blk-x gerrit "$TMP_ROOT/data" "$TMP_ROOT/home" "$ROOT" 2>&1)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "pstack on forge=gerrit was rendered (exit $rc)"
+  assert_contains "$out" "workflow=pstack cannot ship forge=gerrit" "gerrit refusal message"
+  assert_equals "" "$(fm_pstack_workflow_block no-mistakes blk-x fm/blk-x gerrit "$TMP_ROOT/data" "$TMP_ROOT/home" "$ROOT" 2>/dev/null)" \
+    "gerrit refusal printed output anyway"
+  out=$(fm_pstack_workflow_block scout blk-x fm/blk-x none "$TMP_ROOT/data" "$TMP_ROOT/home" "$ROOT" 2>&1)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "pstack on unknown mode was rendered (exit $rc)"
+  assert_contains "$out" "unknown delivery mode 'scout'" "unknown mode refusal message"
+  pass "pstack workflow block refuses gerrit and unknown modes"
+}
+
+test_pstack_workflow_block_renders_the_machine_marker() {
+  local out="$TMP_ROOT/pstack-block.md"
+  fm_pstack_workflow_block no-mistakes blk-t fm/blk-t none "$TMP_ROOT/data" "$TMP_ROOT/home" "$ROOT" > "$out"
+  # The spawn layer reads the FIRST heading body line as the machine-readable
+  # marker, so its spelling is load-bearing.
+  assert_grep '# Worker workflow' "$out" "pstack block lost its heading"
+  assert_grep 'Worker workflow: pstack' "$out" "pstack block lost the machine marker"
+  assert_grep "FM_HOME=$TMP_ROOT/home $ROOT/bin/fm-pstack.sh template blk-t" "$out" \
+    "pstack block lost the exact template command"
+  assert_grep "FM_HOME=$TMP_ROOT/home $ROOT/bin/fm-pstack.sh proof-check blk-t" "$out" \
+    "pstack block lost the exact proof-check command"
+  assert_grep "commit the exact proof candidate on your ship branch \`fm/blk-t\`" "$out" \
+    "pstack block lost the ship branch"
+  assert_grep 'an assistant'"'"'s self-report is never proof' "$out" \
+    "pstack block lost the helper-agent ownership rule"
+  assert_grep 'blocked [key=pstack-unavailable]' "$out" "pstack block lost the unavailable blocker"
+  assert_grep 'Never address the captain' "$out" "pstack block lost the captain bound"
+  pass "pstack workflow block renders marker, commands, and bounds"
+}
+
+test_pstack_workflow_block_mode_sections() {
+  local out="$TMP_ROOT/pstack-nm.md" other="$TMP_ROOT/pstack-lo.md"
+  fm_pstack_workflow_block no-mistakes blk-nm fm/blk-nm none "$TMP_ROOT/data" "$TMP_ROOT/home" "$ROOT" > "$out"
+  # shellcheck disable=SC2016  # fixed-string assert: the backticks stay literal
+  assert_grep 'you own every `axi run` and `axi respond` call' "$out" \
+    "no-mistakes pstack block lost the worker-driven pipeline rule"
+  assert_grep 'the pipeline is the only publisher' "$out" \
+    "no-mistakes pstack block lost the only-publisher rule"
+  assert_grep '## Pipeline outcome' "$out" "no-mistakes pstack block lost the outcome section"
+  fm_pstack_workflow_block local-only blk-lo fm/blk-lo none "$TMP_ROOT/data" "$TMP_ROOT/home" "$ROOT" > "$other"
+  assert_grep 'no pipeline' "$other" "local-only pstack block lost its no-pipeline note"
+  # shellcheck disable=SC2016
+  assert_no_grep 'you own every `axi run`' "$other" \
+    "local-only pstack block inherited the pipeline-driving rule"
+  pass "mode sections differ correctly between no-mistakes and local-only"
+}
+
+test_pstack_entry_overlay_names_the_skill() {
+  local out="$TMP_ROOT/pstack-overlay.md"
+  fm_pstack_entry_overlay 'pstack:poteto-mode' '/tmp/plugin-dir' > "$out"
+  # shellcheck disable=SC2016
+  assert_grep 'invoke the Skill tool with exactly `pstack:poteto-mode`' "$out" \
+    "entry overlay lost the exact Skill invocation"
+  # shellcheck disable=SC2016
+  assert_grep 'loaded from `/tmp/plugin-dir`' "$out" "entry overlay lost the plugin dir"
+  assert_grep 'report the blocker it names and stop' "$out" \
+    "entry overlay lost the no-approximation rule"
+  pass "entry overlay names the exact skill load and the blocking rule"
+}
+
 test_scout_done_is_not_gated
 test_unpushed_ship_done_is_refused
 test_no_mistakes_prevalidation_done_is_not_gated
@@ -400,5 +479,10 @@ test_standalone_local_only_needs_project_ref
 test_non_done_lines_are_not_gated
 test_fenced_and_indented_captain_lines_are_not_intent
 test_pr_based_dod_draft_check_uses_gh_axi
+test_workflow_valid_closed_set
+test_pstack_workflow_block_refuses_gerrit_and_unknown_mode
+test_pstack_workflow_block_renders_the_machine_marker
+test_pstack_workflow_block_mode_sections
+test_pstack_entry_overlay_names_the_skill
 
 echo "all fm-dod-lib tests passed"

@@ -28,13 +28,22 @@
 #   - <name> [<mode> +yolo] - <desc> (added <date>)                  -> <mode> on fm/
 #   - <name> [<mode> +yolo branch=<prefix>] - <desc> (added <date>)  -> <mode> <yolo> <prefix>
 #   - <name> [<mode> forge=gerrit] - <desc> (added <date>)           -> <mode> off, --forge gerrit
+#   - <name> [<mode> workflow=pstack] - <desc> (added <date>)        -> <mode> off, --workflow pstack
 #   <name> may contain spaces; it ends at the literal " [" or " - " that follows it.
-#   Bracket tokens are order-independent: +yolo, branch=<prefix>, and forge=<value>
-#   are recognized by their own shape wherever they appear, and whichever token is
-#   left over is the mode. <prefix> must not contain a space; an empty override
+#   Bracket tokens are order-independent: +yolo, branch=<prefix>, forge=<value>,
+#   and workflow=<standard|pstack> are recognized by their own shape wherever
+#   they appear, and whichever token is left over is the mode. <prefix> must not
+#   contain a space; an empty override
 #   ("branch=") resolves to "" for a bare "<task-id>" ship branch instead of the
 #   legacy "fm/<task-id>".
 #
+# workflow (orthogonal) = the project's registered worker workflow, the pstack
+#   design contract's registry token: `standard` (the default the dimension adds
+#   nothing to) or `pstack`. Like branch=, it is a project fact rather than a
+#   task choice: query it with --workflow; it never appears in the default
+#   "<mode> <yolo>" output. A malformed value (empty or outside the closed set)
+#   is refused ONLY on the --workflow path, and only there, so one registry
+#   typo cannot block the default and --forge readers behind it.
 # Registered modes:
 #   no-mistakes            full pipeline -> PR -> configured merge authority (default)
 #   direct-PR              push + PR via gh-axi, no pipeline
@@ -93,7 +102,7 @@
 # to the forge binding, so it prints even when the forge token is malformed;
 # every path that reads the forge binding (default, --forge, and spawn's
 # forge-agreement check) still refuses.
-# Usage: fm-project-mode.sh [--raw|--branch-prefix|--forge] <project-name>
+# Usage: fm-project-mode.sh [--raw|--branch-prefix|--forge|--workflow] <project-name>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -104,26 +113,30 @@ REG="$DATA/projects.md"
 RAW=0
 BRANCH_PREFIX_QUERY=0
 WANT_FORGE=0
+WANT_WORKFLOW=0
 case "${1:-}" in
   --raw) RAW=1; shift ;;
   --branch-prefix) BRANCH_PREFIX_QUERY=1; shift ;;
   --forge) WANT_FORGE=1; shift ;;
+  --workflow) WANT_WORKFLOW=1; shift ;;
 esac
-NAME=${1:?usage: fm-project-mode.sh [--raw|--branch-prefix|--forge] <project-name>}
+NAME=${1:?usage: fm-project-mode.sh [--raw|--branch-prefix|--forge|--workflow] <project-name>}
 
 if [ ! -f "$REG" ]; then
   echo "warn: no registry at $REG; defaulting $NAME to no-mistakes off" >&2
   if [ "$BRANCH_PREFIX_QUERY" -eq 1 ]; then
     echo "fm/"
+  elif [ "$WANT_WORKFLOW" -eq 1 ]; then echo standard
   elif [ "$WANT_FORGE" -eq 1 ]; then echo none; else echo "no-mistakes off"; fi
   exit 0
 fi
 
 # awk emits one "near <token>" line per keyed token whose key is a near miss of
-# `forge`, then "posture <mode> <yolo> <branch-prefix> <forge>" (branch-prefix is
-# the raw prefix, defaulting to "fm/"; forge is `none` or the whole `forge=<value>`
-# token, so an empty value survives the split), or nothing if the project is
-# absent. Every other token beside the mode is ignored, exactly as before either
+# `forge`, then "posture <mode> <yolo> <forge> <workflow> <branch-prefix>"
+# (branch-prefix is the raw prefix, defaulting to "fm/"; forge is `none` or the
+# whole `forge=<value>` token so an empty value survives the split; workflow is
+# the whole `workflow=<value>` token, or `standard` when no token is present).
+# Every other token beside the mode is ignored, exactly as before either
 # annotation existed.
 parsed=$(awk -v n="$NAME" '
   function dist(x, y,   i, j, lx, ly, d, c, v) {
@@ -149,22 +162,24 @@ parsed=$(awk -v n="$NAME" '
     if (substr($0, 1, plen) != prefix) next
     after = substr($0, plen + 1);
     if (after != "" && substr(after, 1, 2) != " [" && substr(after, 1, 3) != " - ") next
-    mode="no-mistakes"; yolo="off"; branch="fm/"; forge="none";
+    mode="no-mistakes"; yolo="off"; branch="fm/"; forge="none"; wf="standard";
     if (substr(after, 1, 2) == " [") {
       s="";
       nk = split(after, rest, " ");
       for (i=1; i<=nk; i++) { s = s (s==""?"":" ") rest[i]; if (rest[i] ~ /\]$/) break }
       gsub(/^\[|\]$/, "", s);           # strip the surrounding brackets
       k = split(s, a, " ");
-      # Tokens are order-independent: +yolo, branch=<prefix>, and forge=<value>
-      # are recognized by their own shape wherever they appear, keyed tokens
-      # that are neither are ignored (with a near-miss warning for the forge
-      # spelling), and the first token left over is the mode.
+      # Tokens are order-independent: +yolo, branch=<prefix>, forge=<value>, and
+      # workflow=<standard|pstack> are recognized by their own shape wherever
+      # they appear, keyed tokens that are neither are ignored (with a
+      # near-miss warning for the forge spelling), and the first token left
+      # over is the mode.
       mode_set = 0
       for (j=1; j<=k; j++) {
         if (a[j]=="+yolo") { yolo="on"; continue }
         if (a[j] ~ /^branch=/) { branch = substr(a[j], 8); continue }
         if (a[j] ~ /^forge=/) { forge = a[j]; continue }
+        if (a[j] ~ /^workflow=/) { wf = a[j]; continue }
         if (a[j] ~ /^[^=]+=/) {
           key = substr(a[j], 1, index(a[j], "=") - 1);
           e = dist(key, "forge");
@@ -176,8 +191,9 @@ parsed=$(awk -v n="$NAME" '
       }
     }
     # branch is printed LAST: an empty branch= override must survive as an
-    # empty final field, which only holds when nothing follows it.
-    print "posture", mode, yolo, forge, branch; exit
+    # empty final field, which only holds when nothing follows it. The
+    # workflow token stays before branch for the same reason.
+    print "posture", mode, yolo, forge, wf, branch; exit
   }
 ' "$REG")
 
@@ -185,6 +201,7 @@ if [ -z "$parsed" ]; then
   echo "warn: project \"$NAME\" not in registry; defaulting to no-mistakes off" >&2
   if [ "$BRANCH_PREFIX_QUERY" -eq 1 ]; then
     echo "fm/"
+  elif [ "$WANT_WORKFLOW" -eq 1 ]; then echo standard
   elif [ "$WANT_FORGE" -eq 1 ]; then echo none; else echo "no-mistakes off"; fi
   exit 0
 fi
@@ -198,12 +215,30 @@ while IFS=' ' read -r kind rest; do
 done <<EOF
 $parsed
 EOF
-while IFS=' ' read -r m y f b; do
-  mode=$m; yolo=$y; rest_forge=$f; branch=$b
+while IFS=' ' read -r m y f w b; do
+  mode=$m; yolo=$y; rest_forge=$f; rest_workflow=$w; branch=$b
 done <<EOF
 $posture
 EOF
 forge=${rest_forge:-none}
+workflow=${rest_workflow:-standard}
+# Normalize the whole `workflow=<value>` token to its value; the closed set is
+# checked only on the --workflow path, whose output is derived from it. Every
+# other output form is unaffected by a malformed value: one registry typo must
+# not block the default and --forge readers behind it.
+workflow=${workflow#workflow=}
+if [ "$WANT_WORKFLOW" -eq 1 ]; then
+  case "$workflow" in
+    standard|pstack) printf '%s\n' "$workflow" ;;
+    "")
+      echo "refused: empty workflow binding \"workflow=\" registered for $NAME in $REG; the accepted workflow tokens are workflow=standard and workflow=pstack, or no workflow token at all for the standard worker workflow; correct the registry entry" >&2
+      exit 3 ;;
+    *)
+      echo "refused: unknown workflow \"$workflow\" registered for $NAME in $REG; the accepted workflow tokens are workflow=standard and workflow=pstack, or no workflow token at all for the standard worker workflow; correct the registry entry" >&2
+      exit 3 ;;
+  esac
+  exit 0
+fi
 case "$mode" in
   no-mistakes|direct-PR|local-only|no-mistakes-prod-only) ;;
   *) echo "warn: unknown mode \"$mode\" for $NAME; defaulting to no-mistakes off" >&2; mode=no-mistakes; yolo=off; branch=fm/ ;;
