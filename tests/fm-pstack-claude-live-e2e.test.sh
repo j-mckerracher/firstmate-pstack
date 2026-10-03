@@ -61,6 +61,8 @@ run_claude() {
   shift
   (
     cd "$PROJECT" || exit 1
+    # Word splitting is the point: unset_inherited emits separate -u arguments.
+    # shellcheck disable=SC2046
     env $(unset_inherited) CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 \
       DISABLE_AUTOUPDATER=1 claude -p "Reply with exactly READY." \
       --model haiku --dangerously-skip-permissions \
