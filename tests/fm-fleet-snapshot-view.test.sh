@@ -110,7 +110,8 @@ EOF
     "harness=codex" \
     "kind=scout" \
     "mode=scout" \
-    "yolo=off"
+    "yolo=off" \
+    "workflow=pstack"
   printf 'done: report ready\n' > "$home/state/scout-task.status"
   fm_write_meta "$home/state/secondmate-task.meta" \
     "window=firstmate:fm-secondmate-task" \
@@ -166,6 +167,7 @@ test_fixture_snapshot_json() {
     | .current_state.state == "working"
       and .current_state.source == "pane"
       and .pr.url == "https://github.com/kunchenguid/firstmate/pull/9"
+      and .workflow == "standard"
       and .backlog.body_excerpt == "Preserve this detail for bearings."
       and .hints.pending_decision == false
       and .paths.status_log.kind == "event_history"
@@ -173,6 +175,7 @@ test_fixture_snapshot_json() {
   printf '%s' "$out" | jq -e '
     .tasks[] | select(.id == "scout-task")
     | .paths.report.present == true
+      and .workflow == "pstack"
       and .hints.scout_report_present == true
   ' >/dev/null || fail "scout report pointer missing"
   printf '%s' "$out" | jq -e '

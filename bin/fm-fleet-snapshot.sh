@@ -765,6 +765,8 @@ task_json_lines() {
     projects=$(meta_value "$meta" projects)
     spawn_gen=$(meta_value "$meta" spawn_gen)
     branch=$(meta_value "$meta" branch)
+    workflow=$(meta_value "$meta" workflow)
+    [ -n "$workflow" ] || workflow=standard
     remote_host=$(meta_value "$meta" remote_host)
     remote_root=$(meta_value "$meta" remote_root)
     if [ -n "$remote_host" ]; then
@@ -862,6 +864,7 @@ task_json_lines() {
       --arg mode "$mode" \
       --arg yolo "$yolo" \
       --arg branch "$branch" \
+      --arg workflow "$workflow" \
       --arg project "$project" \
       --arg worktree "$worktree" \
       --arg home "$home" \
@@ -895,6 +898,7 @@ task_json_lines() {
         mode:($mode // ""),
         yolo:($yolo // ""),
         branch:($branch | if . == "" then null else . end),
+        workflow:$workflow,
         project:($project // ""),
         spawn_gen:($spawn_gen | if . == "" then null else . end),
         backend:$backend,

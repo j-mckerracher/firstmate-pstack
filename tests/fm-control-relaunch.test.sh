@@ -27,6 +27,8 @@ set -u
 . "$ROOT/bin/fm-trace-context-lib.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-tasks-axi-lib.sh"
+# shellcheck source=tests/pstack-plugin-fixture.sh
+. "$ROOT/tests/pstack-plugin-fixture.sh"
 
 CONTROL="$ROOT/bin/fm-control.sh"
 SPAWN="$ROOT/bin/fm-spawn.sh"
@@ -363,6 +365,80 @@ SH
 }
 
 # --- 1. same-harness relaunch -----------------------------------------------
+
+# --- pstack worker workflow -------------------------------------------------
+
+case_pstack_plugin() {  # <case-dir> -> prints the plugin dir it configured
+  local dir=$1 plugin
+  plugin=$(pstack_write_plugin "$TMP_ROOT/pstack-plugins/pstack")
+  mkdir -p "$dir/home/config"
+  printf '%s\n' "$plugin" > "$dir/home/config/pstack-plugin"
+  printf '%s\n' "$plugin"
+}
+
+# A pstack task's relaunch re-resolves the plugin grant so the replacement
+# worker is launched with the same entry; the replacement record keeps
+# workflow=pstack; the unavailable case refuses before the agent stops.
+test_pstack_relaunch_re_resolves_the_plugin_grant() {
+  local dir out rc plugin
+  dir=$(new_case pstack rl70)
+  add_ship_task "$dir" rl70 claude
+  printf 'workflow=pstack\n' >> "$dir/home/state/rl70.meta"
+  printf '# Worker workflow\nWorker workflow: pstack\n' >> "$dir/home/data/rl70/brief.md"
+  plugin=$(case_pstack_plugin "$dir")
+
+  out=$(run_control "$dir" rl70 relaunch --note "keep driving the pstack loop"); rc=$?
+  expect_code 0 "$rc" "a pstack relaunch with the plugin still resolvable should succeed"$'\n'"$out"
+  assert_contains "$out" "relaunched rl70 harness=claude from=claude" "the relaunch should have completed"
+  [ "$(meta_field "$dir" rl70 workflow)" = pstack ] || fail "the replacement record must carry workflow=pstack"
+  assert_grep "--plugin-dir '$plugin'" "$dir/fake/literal" "the replacement launch must carry the plugin grant"
+  assert_grep "# pstack entry overlay" "$dir/home/data/rl70/launch-brief.md" \
+    "the replacement's instructions must carry the re-rendered entry overlay"
+  pass "fm-control relaunch: a pstack relaunch re-resolves the plugin and keeps the workflow recorded"
+}
+
+test_pstack_relaunch_refuses_before_stop_when_the_plugin_is_unavailable() {
+  local dir out rc
+  dir=$(new_case pstack-dead rl71)
+  add_ship_task "$dir" rl71 claude
+  printf 'workflow=pstack\n' >> "$dir/home/state/rl71.meta"
+
+  out=$(run_control "$dir" rl71 relaunch --note "should refuse with nothing changed"); rc=$?
+  expect_code 1 "$rc" "a pstack relaunch with no configured plugin must refuse"
+  assert_contains "$out" "no pstack plugin is configured" "the refusal must relay the resolver's own error"
+  assert_contains "$out" "nothing has changed yet" "the refusal must state the pre-stop safety"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "the old agent must keep running"
+  assert_no_grep "/exit" "$dir/fake/literal" "refusing a pstack relaunch must type no exit command"
+  [ "$(meta_field "$dir" rl71 harness)" = claude ] || fail "the record must stay unchanged"
+  pass "fm-control relaunch: an unresolvable pstack plugin refuses before the old agent stops"
+}
+
+test_legacy_record_relaunches_standard_without_a_workflow_line() {
+  local dir out rc
+  dir=$(new_case legacy-rl72 rl72)
+  add_ship_task "$dir" rl72 claude
+
+  out=$(run_control "$dir" rl72 relaunch --note "plain handover"); rc=$?
+  expect_code 0 "$rc" "a legacy record's relaunch should not need any workflow configuration"$'\n'"$out"
+  [ "$(meta_field "$dir" rl72 workflow)" = "" ] || fail "the replacement record must carry no workflow line"
+  assert_no_grep "--plugin-dir" "$dir/fake/literal" "a standard relaunch must expand no plugin grant"
+  [ ! -e "$dir/home/data/rl72/launch-brief.md" ] || assert_no_grep "# pstack entry overlay" "$dir/home/data/rl72/launch-brief.md" \
+    "a standard relaunch must render no pstack overlay"
+  pass "fm-control relaunch: a legacy record keeps relaunching standard with no plugin grant"
+}
+
+test_control_refuses_a_workflow_flag() {
+  local dir out rc
+  dir=$(new_case pstack-flag rb73)
+  add_ship_task "$dir" rb73 claude
+  printf 'workflow=pstack\n' >> "$dir/home/state/rb73.meta"
+
+  out=$(run_control "$dir" rb73 relaunch --workflow pstack --note "should never run"); rc=$?
+  expect_code 1 "$rc" "fm-control must refuse a --workflow flag as an unexpected argument"
+  assert_contains "$out" "unexpected argument '--workflow'" "the refusal should name the flag"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a flag refusal must leave the old agent running"
+  pass "fm-control relaunch: a --workflow flag is refused, because the recorded workflow is authoritative"
+}
 
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint() {
   local dir out rc gen_before gen_after
@@ -2387,7 +2463,10 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
 }
 
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
-test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
+test_pstack_relaunch_re_resolves_the_plugin_grant
+test_pstack_relaunch_refuses_before_stop_when_the_plugin_is_unavailable
+test_legacy_record_relaunches_standard_without_a_workflow_line
+test_control_refuses_a_workflow_flag
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_from_linked_home_preserves_recorded_worktree
 test_relaunch_preserves_durable_task_metadata

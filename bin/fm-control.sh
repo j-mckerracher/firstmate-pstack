@@ -782,6 +782,11 @@ resolve_relaunch_profile() {
   PRIOR_RECORDED_HARNESS=$RECORDED_HARNESS
   PRIOR_MODEL=$(fm_meta_get "$META" model)
   PRIOR_EFFORT=$(fm_meta_get "$META" effort)
+  # A legacy record carries no workflow= line: standard. The recorded value is
+  # authoritative for a relaunch (fm-spawn refuses --workflow there), so it is
+  # read before anything can be stopped.
+  PRIOR_WORKFLOW=$(fm_meta_get "$META" workflow)
+  [ -n "$PRIOR_WORKFLOW" ] || PRIOR_WORKFLOW=standard
   [ -n "$PRIOR_MODEL" ] || PRIOR_MODEL=default
   [ -n "$PRIOR_EFFORT" ] || PRIOR_EFFORT=default
   if [ "$HARNESS_SET" = 0 ] \
@@ -858,6 +863,20 @@ resolve_relaunch_profile() {
   [ "$account_model" != default ] || account_model=
   fm_worker_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
     "$account_model" "$TARGET_HARNESS" >/dev/null || return 1
+  # A pstack task's relaunch re-resolves its plugin grant before the old agent
+  # stops, exactly like the account pin above: the launch owner resolves it
+  # again on its own pre-stop side, but by the time it runs there this agent is
+  # already stopped, so the refuse-before-stop transaction needs the same
+  # availability answer on this side of it. The resolver's refusal lines carry
+  # the reason and the fix and are relayed, not paraphrased.
+  if [ "$PRIOR_WORKFLOW" = pstack ]; then
+    if ! RELAUNCH_PSTACK_RESOLVE=$(FM_CONFIG_OVERRIDE="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
+      "$SCRIPT_DIR/fm-pstack.sh" resolve --harness "$TARGET_HARNESS"); then
+      printf '%s\n' "$RELAUNCH_PSTACK_RESOLVE" >&2
+      die "workflow=pstack relaunch of $ID is refused: the resolver output above has the reason and the fix; nothing has changed yet"
+    fi
+    return 0
+  fi
 }
 
 # safe_checkpoint: prove, before anything is stopped, that the work a relaunch
