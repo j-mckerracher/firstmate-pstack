@@ -60,6 +60,7 @@ Never register the binding from detection alone, and never re-derive it later fr
 A forge composes with `no-mistakes`, `direct-PR`, and `no-mistakes-prod-only`, and the registry refuses it on `local-only`, which publishes nothing; a Gerrit-hosted project kept local registers `local-only` with no forge token.
 `yolo` is inactive on a `forge=gerrit` project, so never propose `+yolo` alongside it.
 `bin/fm-project-mode.sh`'s header owns the binding and `bin/fm-dod-lib.sh` owns what it changes for a worker.
+The optional `workflow=<standard|pstack>` token selects the worker workflow with the same shape: raise it at intake alongside the posture, default `standard`, `bin/fm-project-mode.sh`'s header owns the token format, and [docs/pstack-worker-workflow.md](../../../docs/pstack-worker-workflow.md) owns the behavior.
 
 ## Add or clone an existing project
 

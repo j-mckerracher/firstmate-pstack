@@ -9,6 +9,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | --- | --- |
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
+| Worker workflow (pstack or standard) | [Worker workflow](#worker-workflow-configpstack-plugin) |
 | Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
@@ -840,6 +841,21 @@ The diagnostic names the accepted values; Firstmate never falls back to a permis
 The file is a captain-wide safety preference, so it is inherited into secondmate homes under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract; a secondmate's own Claude crewmates then launch on the same posture.
 
 The [Claude adapter reference](../.agents/skills/harness-adapters/references/harness/claude.md) records the permission-mode observations and the distinct startup dialogs.
+
+## Worker workflow (config/pstack-plugin)
+
+A ship task's worker workflow is a dimension separate from its delivery mode: `standard` (the default, today's behavior) or `pstack`.
+The workflow changes no delivery semantics and no merge authority; [docs/pstack-worker-workflow.md](pstack-worker-workflow.md) owns the behavior, limits, and live evidence, while `bin/fm-pstack.sh`'s header owns availability resolution and the proof-record format.
+The workflow travels only through the worker's launch arguments; nothing is written into the project checkout, the project's agent-memory files, or Claude settings, so no-mistakes gate agents never see it.
+On `forge=gerrit` projects, scouts, and secondmates, or without a configured plugin, the workflow resolves to availability refusals exactly as `bin/fm-pstack.sh`'s header states them.
+
+The optional local, gitignored `config/pstack-plugin` holds one line: the absolute path of a pstack Claude plugin root that itself contains `.claude-plugin/plugin.json`, not a folder of plugins, resolved to its real path at use.
+An absent file leaves pstack unavailable, and every worker stays standard.
+Firstmate never installs pstack and never runs the plugin's `setup-pstack` helper, which writes user-global harness state; the captain chooses and maintains the checkout, and `config/pstack-plugin` records only that choice.
+As a declared local configuration item, the file is inherited into secondmate homes under the [secondmate-provisioning](../.agents/skills/secondmate-provisioning/SKILL.md) contract, and the same availability contract applies there.
+
+A registered project selects its workflow with the optional registry token `workflow=<standard|pstack>`; `bin/fm-project-mode.sh`'s header owns the token format, and `--workflow <project>` prints `standard` or `pstack`, with an absent or unregistered entry meaning `standard`.
+An unreadable or malformed plugin configuration is an actionable error reported at the launch or promotion that needs it, never silently rounded down to a standard worker.
 
 ## Worker account pin (config/claude-account, config/pi-account)
 

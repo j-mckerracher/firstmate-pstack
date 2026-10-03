@@ -12,6 +12,7 @@ Busy hooks verified 2026-07-28 on Claude Code 2.1.220.
 | Skill | `/<skill>`, for example `/no-mistakes`. |
 | Model | `--model <model>`; discover through the interactive `/model` picker, with alias or full-name shape documented by `claude --help`. |
 | Effort | `--effort <low\|medium\|high\|xhigh\|max>`, verified on 2.1.196. |
+| Plugin | `--plugin-dir <path>` loads one plugin root named on the launch command line for that session only, without touching installed plugins or settings; `--add-dir <path>` makes its files readable. Verified 2026-10-03 on 2.1.285: the stream-json init lists a loaded plugin's commands, and without the flag nothing from the plugin appears (see [`runtime verification`](../../../../../docs/verification/runtime-backends.md#claude-plugin-dir-load)). |
 | Permissions | `--dangerously-skip-permissions` by default, or `--permission-mode auto` when `config/claude-permission-mode` is `auto`; the `auto` shape verified on 2.1.269. See [`Claude permission mode`](../../../../../docs/configuration.md#claude-permission-mode-configclaude-permission-mode) for the launch grant and configuration. |
 
 ## Workspace trust

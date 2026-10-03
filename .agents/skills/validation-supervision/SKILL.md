@@ -27,6 +27,7 @@ Require the matching `resolved` event, forbid `--yes`, and require the worker to
 Resume fleet supervision immediately after the decision lands.
 
 Judge validation by the resolved state line from [`bin/fm-crew-state.sh`](../../../bin/fm-crew-state.sh), whose header owns outcome mappings and CI-monitor/daemon exceptions, never by shell liveness, the last status event, or a raw run record.
+On a pstack ship, firstmate's validation trigger first runs the workflow's deterministic proof check (`bin/fm-pstack.sh proof-check <id>`, whose header owns the requirements) and sends the trigger only when it passes; a refusal steers the worker with the listed reasons and never edits the proof record or disables the check on the worker's behalf.
 Workers parked at approval or fix-review must follow the active gate help.
 A worker hand-editing, committing, aborting, or restarting during an active validation run duplicates pipeline ownership outside the supersession sequence above; steer it back to the gate response flow.
 The worker reports the PR when CI first becomes green rather than waiting for merge monitoring to finish.

@@ -2456,3 +2456,24 @@ A throwaway scout was spawned through `bin/fm-spawn.sh --scout --harness omp --m
 6. `bin/fm-control.sh <id> exit` stopped the agent and `bin/fm-teardown.sh` returned the worktree and closed the item.
 
 `FM_OMP_LIVE_E2E=1 tests/fm-omp-primary-live-e2e.test.sh` refreshes the primary evidence; the worker path above is refreshed by repeating the scout dispatch after any omp upgrade.
+
+## Claude plugin-dir load
+
+Verified 2026-10-03 on Claude Code 2.1.285 (Darwin 25.5.0) with the opt-in live guard against a real harness-neutral pstack plugin checkout at its `plugins/pstack` root, spending two small model turns:
+
+```sh
+FM_PSTACK_CLAUDE_LIVE=1 FM_PSTACK_PLUGIN_DIR=<checkout>/plugins/pstack \
+  bin/fm-test-run.sh tests/fm-pstack-claude-live-e2e.test.sh
+```
+
+Observed output:
+
+```text
+ok - Claude Code 2.1.285 (Claude Code) without --plugin-dir: the init event lists no pstack:poteto-mode entry
+ok - Claude Code 2.1.285 (Claude Code) with --plugin-dir: the init event lists the pstack:poteto-mode entry
+```
+
+The guard asserts on the stream-json init event only, so the verdict is independent of the model's answer, and the entry appears in both the init event's `slash_commands` and `skills` lists, so no single rendered label is load-bearing.
+Without the flag, neither list contains the plugin's entry, which is the negative case the pstack worker workflow's gate isolation relies on: the plugin travels only through the launch command line.
+`claude --help` on the same build documents `--plugin-dir <path>` as loading a plugin from a directory or `.zip`.
+Run the guard after any Claude upgrade that touches plugin loading.
