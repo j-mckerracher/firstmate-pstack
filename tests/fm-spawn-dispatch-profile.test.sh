@@ -2124,6 +2124,47 @@ test_standard_ship_meta_and_launch_stay_untouched_by_the_workflow() {
   pass "a standard ship spawn keeps its launch and record byte-identical and adds no workflow"
 }
 
+test_real_fm_brief_pstack_scaffold_spawn_agrees() {
+  local rec id out status launch expected pdir brief
+  id=pstack-briefreal-z43
+  rec=$(make_spawn_case pstack-briefreal claude "$id")
+  read_case_record "$rec"
+  pdir=$(pstack_case_plugin "$HOME_DIR")
+
+  # Scaffold with worker B's real fm-brief --workflow pstack (the same
+  # fm_pstack_workflow_block owner), then fill its placeholders the way a ship
+  # brief is filled before dispatch. The fixture pre-writes a plain brief, so
+  # the real scaffold replaces it whole.
+  rm -rf "$HOME_DIR/data/$id"
+  brief_out=$(FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-brief.sh" "$id" "$(basename "$PROJ_DIR")" \
+    --mode no-mistakes --workflow pstack 2>&1)
+  expect_code 0 "$?" "fm-brief --workflow pstack should scaffold the case brief"$'\n'"$brief_out"
+  brief="$HOME_DIR/data/$id/brief.md"
+  python3 - "$brief" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('{TASK}', 'launch the pstack entry and prove the change')
+s = s.replace('{FIRSTMATE_SPEC}', 'Exercise the spawn behavior under test.')
+open(p, 'w').write(s)
+PY
+  [ "$(grep -c '^Worker workflow:' "$brief")" = 1 ] \
+    || fail "the real fm-brief pstack scaffold should carry the workflow marker exactly once"
+  if grep -qF '{TASK}' "$brief"; then fail "the scaffold still carries an unfilled {TASK} placeholder"; fi
+  if grep -qF '{FIRSTMATE_SPEC}' "$brief"; then fail "the scaffold still carries an unfilled {FIRSTMATE_SPEC} placeholder"; fi
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --workflow pstack)
+  status=$?
+  expect_code 0 "$status" "a real fm-brief pstack scaffold should agree with --workflow pstack"$'\n'"$out"
+  assert_grep "workflow=pstack" "$HOME_DIR/state/$id.meta" "the real-scaffold spawn did not record workflow=pstack"
+  launch=$(cat "$LAUNCH_LOG")
+  expected=$(claude_expected_launch "$launch" "$HOME_DIR" "$id" --dangerously-skip-permissions)
+  expected=${expected/"--settings "/"$(pstack_plugin_grant "$pdir")--settings "}
+  [ "$launch" = "$expected" ] || fail "the real-scaffold pstack launch lost its plugin grant"$'\n'"expected: $expected"$'\n'"actual:   $launch"
+  assert_grep "pstack entry overlay" "$HOME_DIR/data/$id/launch-brief.md" "the real-scaffold launch brief missed the entry overlay"
+  pass "a real fm-brief --workflow pstack scaffold fills, spawns and carries the plugin grant"
+}
+
 test_worker_launch_delivers_role_scope
 test_no_profile_keeps_claude_profile_defaults
 test_claude_launch_brief_publishes_record_doorbell
@@ -2196,5 +2237,6 @@ test_pstack_applies_only_to_ships
 test_pstack_registry_deviation_is_announced_and_gerrit_refused
 test_pstack_batch_forwards_the_workflow_flag
 test_standard_ship_meta_and_launch_stay_untouched_by_the_workflow
+test_real_fm_brief_pstack_scaffold_spawn_agrees
 
 echo "# all fm-spawn-dispatch-profile tests passed"
