@@ -103,7 +103,8 @@
 #      it does not rewrite historical events or backlog records.
 #      passed-with-override is a passing outcome
 #      carrying an explicitly approved Test or CI exception (no-mistakes' own
-#      vocabulary), read identically to a clean passed. passed-with-skips is
+#      vocabulary), read as done but with that override kept visible in the
+#      detail, unlike a clean passed. passed-with-skips is
 #      also a passing outcome (publication or CI verification was
 #      automatically skipped, no-mistakes' own vocabulary), read as done but
 #      with that skip kept visible in the detail, unlike a clean passed.
@@ -1087,7 +1088,8 @@ if [ "$HAVE_RUN" = 1 ]; then
 
     if [ -n "$outcome" ]; then
       case "$outcome" in
-        passed|passed-with-override) RUN_STATE="done"; RUN_DETAIL=$(passed_pr_detail) ;;
+        passed) RUN_STATE="done"; RUN_DETAIL=$(passed_pr_detail) ;;
+        passed-with-override) RUN_STATE="done"; RUN_DETAIL="$(passed_pr_detail) (explicit pipeline override approved)" ;;
         passed-with-skips) RUN_STATE="done"; RUN_DETAIL="$(passed_pr_detail) (publication/CI verification skipped)" ;;
         checks-passed) RUN_STATE="done"; RUN_DETAIL="checks green: PR ready for review" ;;
         failed)

@@ -1426,9 +1426,10 @@ test_terminal_passed_with_override() {
   assert_contains "$out" "state: done" "passed-with-override run -> done, not unknown"
   assert_contains "$out" "source: run-step" "passed-with-override -> run-step source"
   assert_contains "$out" "run passed: PR merged" "passed-with-override run reports merged only after the PR record says merged"
+  assert_contains "$out" "explicit pipeline override approved" "passed-with-override keeps the override visible, unlike a clean pass"
   assert_not_contains "$out" "state: unknown" "passed-with-override must not fall through to unknown"
   assert_not_contains "$out" "outcome: passed-with-override" "passed-with-override must not surface as a raw unmapped outcome detail"
-  pass "terminal passed-with-override run reads done like a clean pass"
+  pass "terminal passed-with-override run reads done with the override kept visible"
 }
 
 test_terminal_passed_with_skips() {
