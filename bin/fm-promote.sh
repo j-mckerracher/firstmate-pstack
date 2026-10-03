@@ -21,13 +21,26 @@
 # read outside fenced blocks and indented examples so a quoted `Captain:` sample
 # never passes the provenance gate as the ask (bin/fm-dod-lib.sh).
 # A scout records no delivery posture, so promotion is where this task's delivery
-# contract is decided: --mode, --yolo, and the ship branch resolved from
+# contract is decided: --mode, --yolo, the worker workflow from --workflow, and
+# the ship branch resolved from
 # --branch-prefix are written into the meta alongside the kind= flip. Firstmate resolves all three at promotion time, having just
 # read the scout's report (AGENTS.md section 7); data/projects.md holds the
 # captain's standing posture as context, and this script never looks that posture
 # up. The registry IS read for one thing only: the project's forge binding, which
 # is a project fact rather than a per-task decision, so promotion takes it from
 # there instead of asking firstmate to remember it.
+# --workflow names the worker workflow dimension exactly as bin/fm-brief.sh's
+# --workflow does, `standard` default | `pstack` (bin/fm-dod-lib.sh owns the
+# worker obligations; bin/fm-brief.sh's header owns the brief-side shape). A
+# pstack promotion is refused for forge=gerrit, requires the task's recorded
+# harness to be claude and its backend to be relaunch-capable (tmux, or a
+# backend= herdr; absent backend= means tmux), and resolves availability
+# from config/pstack-plugin with bin/fm-pstack.sh resolve before anything is
+# written, because the pstack plugin loads only at launch: a relaunch re-carries
+# it on the replacement worker's argv, while this send does not. The workflow
+# block is therefore rendered into the promotion contract, and the printed next
+# command becomes bin/fm-control.sh relaunch instead of a plain fm-send delivery
+# of these instructions.
 # no-mistakes-prod-only is a registry policy rather than a task mode and is refused.
 # There is no --forge flag here: the binding comes from the registry, and for a
 # task record naming no project it is none. bin/fm-brief.sh takes --forge instead
@@ -35,7 +48,7 @@
 # its value against the registry; bin/fm-project-mode.sh's header owns the
 # binding and bin/fm-dod-lib.sh owns what it changes for the worker, including
 # the refusal of a forge on local-only.
-# Usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>]
+# Usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--workflow <standard|pstack>]
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,6 +57,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
@@ -63,6 +78,7 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 MODE=
 YOLO=
+WORKFLOW=standard
 BRANCH_PREFIX=fm/
 MODE_SET=0
 YOLO_SET=0
@@ -77,6 +93,7 @@ for a in "$@"; do
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
+      workflow) WORKFLOW=$a ;;
       branch-prefix) BRANCH_PREFIX=$a ;;
     esac
     want_value=
@@ -87,6 +104,8 @@ for a in "$@"; do
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
     --yolo) want_value=yolo ;;
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
+    --workflow) want_value=workflow ;;
+    --workflow=*) WORKFLOW=${a#--workflow=} ;;
     --branch-prefix) want_value="branch-prefix" ;;
     --branch-prefix=*) BRANCH_PREFIX=${a#--branch-prefix=} ;;
     *) POS+=("$a") ;;
@@ -113,6 +132,7 @@ case "$YOLO" in
   on|off) ;;
   *) echo "error: --yolo must be on or off (got '$YOLO')" >&2; exit 1 ;;
 esac
+fm_workflow_valid "$WORKFLOW" "fm-promote.sh --workflow" || exit 1
 # A posture this forge cannot carry is refused once the registry binding has been
 # read. Merge authority on a Gerrit forge is refused rather than quietly dropped,
 # on the captain's decision of 2026-09-15 (bin/fm-project-mode.sh's header carries
@@ -195,6 +215,10 @@ if [ -n "$PROMOTE_PROJECT" ]; then
   FORGE=${PROMOTE_STANDING_FORGE:-none}
   refuse_impossible_forge_posture || exit 1
 fi
+if [ "$WORKFLOW" = pstack ] && [ "$FORGE" = gerrit ]; then
+  echo "error: $ID cannot promote to workflow=pstack for forge=gerrit: the pstack worker obligations assume a pull request or a ready worktree, not a review server; promote with --workflow standard" >&2
+  exit 1
+fi
 # An unbound project keeps the exact wording it always had.
 PROMOTE_FORGE_WORDS=
 [ "$FORGE" = none ] || PROMOTE_FORGE_WORDS=" forge=$FORGE"
@@ -221,6 +245,34 @@ fi
 if [ -z "$(printf '%s' "$INTENT_BODY" | tr -d '[:space:]')" ]; then
   echo "error: $SCOUT_BRIEF has no provenance-marked Captain's intent; add the captain's actual words before promotion" >&2
   exit 1
+fi
+
+# Because a pstack task's plugin rides the replacement worker's argv, a pstack
+# promotion requires a launch to carry it: the recorded harness must be claude
+# (bin/fm-pstack.sh's matrix) and the backend must be one whose relaunch can
+# prove the old agent stopped (tmux, or herdr; absent backend= means tmux).
+# Availability is then resolved before anything is written, so a refusal leaves
+# the task record and every contract file untouched.
+if [ "$WORKFLOW" = pstack ]; then
+  case "$(fm_meta_get "$META" harness)" in
+    claude) ;;
+    *)
+      echo "error: $ID cannot promote to workflow=pstack: its recorded harness is \"$(fm_meta_get "$META" harness)\", not claude (bin/fm-pstack.sh's supported-harnesses prints the matrix); re-dispatch this work on a claude worker first" >&2
+      exit 1
+      ;;
+  esac
+  case "$(fm_meta_get "$META" backend)" in
+    ''|tmux|herdr) ;;
+    *)
+      echo "error: $ID cannot promote to workflow=pstack: its recorded backend is \"$(fm_meta_get "$META" backend)\", which is not relaunch-capable (tmux or herdr only); re-dispatch on a relaunch-capable backend first" >&2
+      exit 1
+      ;;
+  esac
+  if ! PSTACK_RESOLVE_OUT=$("$FM_ROOT/bin/fm-pstack.sh" resolve --harness claude 2>&1); then
+    echo "error: $ID cannot promote to workflow=pstack: pstack is unavailable on this host (the refusal below is bin/fm-pstack.sh's own); correct the cause and promote again" >&2
+    printf '%s\n' "$PSTACK_RESOLVE_OUT" >&2
+    exit 1
+  fi
 fi
 
 # The promoted worker must receive the same delivery contract an ordinary ship
@@ -258,6 +310,10 @@ EOF
   if [ -n "$PROMOTION_ASK_USER_BLOCK" ]; then
     printf '\nThe no-mistakes ask-user escalation below supersedes the scout rule 6 escalation shape.\n'
     printf '%s\n' "$PROMOTION_ASK_USER_BLOCK"
+  fi
+  if [ "$WORKFLOW" = pstack ]; then
+    printf '\n'
+    fm_pstack_workflow_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$DATA" "$FM_HOME" "$FM_ROOT" || return 1
   fi
   printf '\n'
   fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE"
@@ -313,12 +369,17 @@ fi
 BRIEF_REPLACEMENT=
 
 TMP="$STATE/.$ID.meta.promote.${BASHPID:-$$}"
-grep -v -e '^kind=' -e '^mode=' -e '^yolo=' -e '^branch=' "$META" > "$TMP"
+grep -v -e '^kind=' -e '^mode=' -e '^yolo=' -e '^branch=' -e '^workflow=' "$META" > "$TMP"
 {
   echo "kind=ship"
   echo "mode=$MODE"
   echo "yolo=$YOLO"
   echo "branch=$BRANCH"
+  # Standard keeps the record byte-identical to today's: only the pstack
+  # workflow carries a line (bin/fm-spawn.sh reads the marker the same way).
+  if [ "$WORKFLOW" = pstack ]; then
+    echo "workflow=pstack"
+  fi
 } >> "$TMP"
 if ! fm_backlog_atomic_transition publish "$TMP" "$META" "task record" "$STATE"; then
   rm -f -- "$TMP"
@@ -335,8 +396,16 @@ META_LOCK_HELD=0
 HOME_Q=$(printf '%q' "$FM_HOME")
 INSTRUCTIONS_Q=$(printf '%q' "$INSTRUCTIONS")
 echo "promoted $ID to ship mode=$MODE yolo=$YOLO$PROMOTE_FORGE_WORDS (teardown protection restored)"
-echo "wrote ship instructions for mode=$MODE$PROMOTE_FORGE_WORDS: $INSTRUCTIONS"
-echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID \"\$(cat $INSTRUCTIONS_Q)\""
+# The pstack plugin loads only at launch, so a promoted pstack worker is started
+# by a relaunch rather than by delivering these instructions to the old agent
+# (the instructions still publish for the replacement to receive).
+if [ "$WORKFLOW" = pstack ]; then
+  echo "promoted $ID to workflow=pstack; the plugin loads only at launch, so start it with a relaunch"
+  echo "next: FM_HOME=$HOME_Q bin/fm-control.sh $ID relaunch --note 'pstack promotion; relaunch to load the pstack plugin'"
+else
+  echo "wrote ship instructions for mode=$MODE$PROMOTE_FORGE_WORDS: $INSTRUCTIONS"
+  echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID \"\$(cat $INSTRUCTIONS_Q)\""
+fi
 
 promote_print_rechain_hint() {
   local consent_home=$1 work_home=$2 task_id=$3 id prefix

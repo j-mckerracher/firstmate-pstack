@@ -17,6 +17,9 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# shellcheck source=tests/pstack-plugin-fixture.sh
+. "$(dirname "${BASH_SOURCE[0]}")/pstack-plugin-fixture.sh"
+
 SPAWN="$ROOT/bin/fm-spawn.sh"
 BRIEF="$ROOT/bin/fm-brief.sh"
 PROMOTE="$ROOT/bin/fm-promote.sh"
@@ -299,6 +302,132 @@ test_promote_refuses_a_symlinked_task_record() {
   leftover=$(find "$home/state" -maxdepth 1 -name '.*.meta.promote.*' -print 2>/dev/null || true)
   [ -z "$leftover" ] || fail "promotion left a staging file after a refused publish: $leftover"
   pass "fm-promote: a symlinked task record is refused and its target is left untouched"
+}
+
+# A pstack promotion is gated like any other value promotion: the workflow value is
+# a closed set, the recorded worker must be a relaunch-capable claude task, the
+# host must have pstack configured, and the gerrit forge is refused - every gate
+# before any contract file or record field is written.
+test_promotion_gates_the_pstack_workflow() {
+  local home meta out status label id n
+  home="$TMP_ROOT/promote-wf/home"
+  mkdir -p "$home/state" "$home/config" "$home/data"
+
+  # Refusal rows: every one leaves the scout record and the instruction file
+  # untouched, and every refusal names its gate.
+  n=0
+  while IFS='|' read -r label wf extra want; do
+    [ -n "$label" ] || continue
+    n=$((n + 1))
+    id="promote-wf-g$n"
+    write_brief "$home" "$id"
+    meta="$home/state/$id.meta"
+    {
+      printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id"
+      # shellcheck disable=SC2206 # Extra recorded keys, one per line, word-split.
+      for word in $extra; do printf '%s\n' "$word"; done
+    } > "$meta"
+    out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+      "$PROMOTE" "$id" --mode direct-PR --yolo off --workflow "$wf" 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "$label: a gated pstack promotion should exit non-zero"
+    assert_contains "$out" "$want" "$label: refusal did not explain the gate"
+    assert_grep 'kind=scout' "$meta" "$label: refused promotion still changed the task record"
+    assert_no_grep '^mode=' "$meta" "$label: refused promotion recorded a delivery mode"
+    assert_no_grep '^workflow=' "$meta" "$label: refused promotion recorded a workflow"
+    assert_absent "$home/data/$id/ship-instructions.md" \
+      "$label: refused promotion published ship instructions"
+  done <<'ROWS'
+unknown workflow value|bogus||unknown workflow 'bogus'
+recorded harness is not claude|pstack|harness=pi|not claude
+recorded harness is absent|pstack||not claude
+recorded backend is not relaunch-capable|pstack|harness=claude backend=zellij|not relaunch-capable
+pstack is not configured on this host|pstack|harness=claude|no pstack plugin is configured
+ROWS
+
+  # With the plugin configured, a claude scout record promotes to pstack: the
+  # record gains one workflow line and the printed next command is a relaunch,
+  # not a send, because the plugin loads only at launch.
+  id="promote-wf-p1"
+  meta="$home/state/$id.meta"
+  printf 'window=fm-%s\nkind=scout\nharness=claude\nworktree=/tmp/wt\n' "$id" > "$meta"
+  write_brief "$home" "$id"
+  plugin_dir=$(pstack_write_plugin "$home/config/pstack-plugin-root")
+  printf '%s\n' "$plugin_dir" > "$home/config/pstack-plugin"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    "$PROMOTE" "$id" --mode direct-PR --yolo off --workflow pstack 2>&1)
+  status=$?
+  expect_code 0 "$status" "a gated, configured pstack promotion should succeed"
+  assert_contains "$out" "promoted $id to workflow=pstack" \
+    "pstack promotion did not announce the workflow it promoted to"
+  assert_contains "$out" "bin/fm-control.sh $id relaunch --note" \
+    "pstack promotion did not hand firstmate a relaunch command"
+  assert_not_contains "$out" "fm-send.sh" \
+    "pstack promotion still handed firstmate a send command"
+  [ "$(grep -c '^workflow=' "$meta")" = 1 ] || fail "promotion left the wrong number of workflow lines in the task record"
+  assert_grep 'kind=ship' "$meta" "pstack promotion did not restore ship teardown protection"
+  local instructions
+  instructions="$home/data/$id/ship-instructions.md"
+  assert_present "$instructions" "pstack promotion published no instructions"
+  local work_line dod_line
+  work_line=$(grep -n '^# Worker workflow$' "$instructions" | head -1 | cut -d: -f1)
+  dod_line=$(grep -n '^# Definition of done$' "$instructions" | head -1 | cut -d: -f1)
+  [ -n "$work_line" ] && [ -n "$dod_line" ] \
+    || fail "the published instructions lost their workflow or Definition of done heading"
+  [ "$work_line" -lt "$dod_line" ] \
+    || fail "the workflow block must render before the Definition of done in published instructions"
+  assert_grep 'Worker workflow: pstack' "$instructions" \
+    "the published instructions did not carry the machine-readable workflow marker"
+
+  # A gerrit project refuses pstack before anything is written, naming the forge
+  # it cannot carry.
+  local gerrit_home gerrit_meta
+  gerrit_home="$TMP_ROOT/promote-wf-gerrit/home"
+  mkdir -p "$gerrit_home/state" "$gerrit_home/config" "$gerrit_home/data" "$gerrit_home/projects/proj"
+  plugin_dir=$(pstack_write_plugin "$gerrit_home/config/pstack-plugin-root")
+  printf '%s\n' "$plugin_dir" > "$gerrit_home/config/pstack-plugin"
+  printf '%s\n' '- proj [no-mistakes forge=gerrit] - fixture (added 2026-01-01)' \
+    > "$gerrit_home/data/projects.md"
+  meta="$gerrit_home/state/promote-wf-gr.meta"
+  write_brief "$gerrit_home" promote-wf-gr
+  printf 'window=fm-promote-wf-gr\nkind=scout\nharness=claude\nworktree=/tmp/wt\nproject=%s/projects/proj\n' \
+    "$gerrit_home" > "$meta"
+  out=$(FM_HOME="$gerrit_home" FM_STATE_OVERRIDE="$gerrit_home/state" \
+    "$PROMOTE" promote-wf-gr --mode no-mistakes --yolo off --workflow pstack 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a gerrit pstack promotion should exit non-zero"
+  assert_contains "$out" "cannot promote to workflow=pstack for forge=gerrit" \
+    "the gerrit pstack refusal did not name the forge"
+  assert_grep 'kind=scout' "$meta" "the gerrit pstack refusal still changed the task record"
+  assert_no_grep '^workflow=' "$meta" "the gerrit pstack refusal recorded a workflow"
+  assert_absent "$gerrit_home/data/promote-wf-gr/ship-instructions.md" \
+    "the gerrit pstack refusal published ship instructions"
+  pass "fm-promote: a pstack promotion is gated on the record, the host, and the forge before anything is written"
+}
+
+# A promotion without --workflow, or with --workflow standard, stays exactly as it
+# was: no workflow line in the task record, the fm-send delivery command, and a
+# contract payload identical to the one before the workflow dimension existed.
+test_promotion_stays_standard_by_default() {
+  local home meta id out
+  home="$TMP_ROOT/promote-std/home"
+  mkdir -p "$home/state" "$home/config" "$home/data"
+  plugin_dir=$(pstack_write_plugin "$home/config/pstack-plugin-root")
+  printf '%s\n' "$plugin_dir" > "$home/config/pstack-plugin"
+
+  id="promote-std-d"
+  meta="$home/state/$id.meta"
+  printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$meta"
+  write_brief "$home" "$id"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" "$id" --mode direct-PR --yolo on 2>&1)
+  assert_contains "$out" "wrote ship instructions for mode=direct-PR" \
+    "a standard promotion lost its delivery announcement"
+  assert_contains "$out" "bin/fm-send.sh fm-$id" \
+    "a standard promotion lost its delivery command"
+  assert_no_grep '^workflow=' "$meta" "a standard promotion recorded a workflow"
+  assert_no_grep 'Worker workflow:' "$home/data/$id/ship-instructions.md" \
+    "a standard promotion carried a workflow block"
+  pass "fm-promote: a standard promotion stays byte-identical in record and contract"
 }
 
 # The delivery contract only protects a worker that actually receives it. A promoted
@@ -1686,6 +1815,8 @@ test_spawn_notices_a_rigor_downgrade_against_the_registry
 test_scout_records_no_delivery_posture
 test_promote_requires_and_records_the_delivery_contract
 test_promote_refuses_a_symlinked_task_record
+test_promotion_gates_the_pstack_workflow
+test_promotion_stays_standard_by_default
 test_promotion_delivers_the_real_definition_of_done
 test_promotion_persists_the_selected_ship_branch
 test_promotion_branch_command_is_shell_safe

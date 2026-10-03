@@ -811,6 +811,24 @@ else
   # The pre-marker answer text, kept for the closing resolved note so the
   # durable ledger records the plain answer without marker or corr bytes.
   RESOLVE_ANSWER_TEXT=$MESSAGE
+  # A pstack task's validation trigger is gated on its proof record
+  # (bin/fm-pstack.sh's header owns proof-check): the /no-mistakes (or codex
+  # $no-mistakes) validation steer to a task whose record carries
+  # workflow=pstack refuses with the record's own failing reasons, so
+  # validation never starts on uncommitted or unproved work. The gate is keyed
+  # on the task record only; an explicit backend target names an endpoint, not
+  # a task, and every other steer shape is unaffected.
+  if [ -n "$TARGET_META" ] && [ "$(fm_meta_get "$TARGET_META" workflow)" = pstack ]; then
+    case "$RESOLVE_ANSWER_TEXT" in
+    /no-mistakes | /no-mistakes\ * | '$'no-mistakes | '$'no-mistakes\ *)
+      if ! pstack_proof_out=$("$SCRIPT_DIR/fm-pstack.sh" proof-check "$(fm_send_id_from_meta "$TARGET_META")" 2>&1); then
+        echo "error: validation steer not sent to pstack task $(fm_send_id_from_meta "$TARGET_META"): its proof record does not pass proof-check, so nothing was sent; the failing reasons below are bin/fm-pstack.sh's own" >&2
+        printf '%s\n' "$pstack_proof_out" >&2
+        exit 1
+      fi
+      ;;
+    esac
+  fi
   if [ "$MARK_FROM_FIRSTMATE" = 1 ] && [ -n "$FIRE_AND_FORGET_ID" ]; then
     fm_message_mark_from_firstmate "$MESSAGE" MESSAGE
     MESSAGE="${FM_FROMFIRST_MARK}delivery=${FIRE_AND_FORGET_ID} ${MESSAGE#"$FM_FROMFIRST_MARK"}"

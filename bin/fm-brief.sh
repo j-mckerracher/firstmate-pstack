@@ -14,7 +14,7 @@
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
 # PR instead of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--forge <none|gerrit> [--shape squash]] [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--branch-prefix <prefix>] [--forge <none|gerrit> [--shape squash]] [--workflow <standard|pstack>] [--herdr-lab]
 #        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
@@ -72,6 +72,16 @@
 # membership pinned when its watch is armed, because the merge watch follows one
 # change.
 # It defaults to squash on gerrit and is refused without it.
+# --workflow names the worker workflow dimension, `standard` default | `pstack`,
+# orthogonal to --mode exactly as --forge is. bin/fm-dod-lib.sh owns the
+# pstack obligations block this script inserts before the Definition of done,
+# bin/fm-pstack.sh owns availability resolution and the proof format, and
+# bin/fm-spawn.sh reads the `Worker workflow: pstack` marker back from the
+# source brief and refuses a launch whose working workflow disagrees. It is
+# refused on scout and secondmate scaffolds, with --forge gerrit (whose
+# review-server shape the pstack obligations do not cover, v1), and on an
+# unknown value. A brief without --workflow, or with --workflow standard, is
+# byte-identical to today's scaffold.
 # The generated ship brief records the chosen mode as a fixed machine-readable
 # "Delivery contract: mode=<mode>" line, followed by " forge=gerrit shape=squash"
 # on that forge. bin/fm-spawn.sh reads that line and refuses to launch a ship task
@@ -189,6 +199,8 @@ BRANCH_PREFIX=fm/
 BRANCH_PREFIX_SET=0
 FORGE=none
 FORGE_SET=0
+WORKFLOW=standard
+WORKFLOW_SET=0
 SHAPE=
 SHAPE_SET=0
 POS=()
@@ -202,6 +214,7 @@ for a in "$@"; do
       mode) MODE=$a; MODE_SET=1 ;;
       branch-prefix) BRANCH_PREFIX=$a; BRANCH_PREFIX_SET=1 ;;
       forge) FORGE=$a; FORGE_SET=1 ;;
+      workflow) WORKFLOW=$a; WORKFLOW_SET=1 ;;
       shape) SHAPE=$a; SHAPE_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
@@ -219,6 +232,8 @@ for a in "$@"; do
     --branch-prefix=*) BRANCH_PREFIX=${a#--branch-prefix=}; BRANCH_PREFIX_SET=1 ;;
     --forge) want_value=forge ;;
     --forge=*) FORGE=${a#--forge=}; FORGE_SET=1 ;;
+    --workflow) want_value=workflow ;;
+    --workflow=*) WORKFLOW=${a#--workflow=}; WORKFLOW_SET=1 ;;
     --shape) want_value=shape ;;
     --shape=*) SHAPE=${a#--shape=}; SHAPE_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
@@ -276,8 +291,19 @@ if [ "$KIND" = ship ]; then
     echo "error: --shape applies only with --forge gerrit, where the worker publishes the change itself" >&2
     exit 1
   fi
-elif [ "$FORGE_SET" -eq 1 ] || [ "$SHAPE_SET" -eq 1 ]; then
-  echo "error: --forge and --shape apply only to ship briefs; a scout delivers a report and a secondmate charter is not a delivery contract" >&2
+  # The workflow validates against the closed set bin/fm-dod-lib.sh owns, and a
+  # pstack workflow is refused on the review-server forge for the same reason
+  # the renderers refuse it: the obligations assume a pull request or a ready
+  # worktree.
+  if [ "$WORKFLOW_SET" -eq 1 ]; then
+    fm_workflow_valid "$WORKFLOW" "fm-brief.sh --workflow" || exit 1
+  fi
+  if [ "$FORGE" = gerrit ] && [ "$WORKFLOW" = pstack ]; then
+    echo "error: --workflow pstack is refused with --forge gerrit: the pstack worker obligations assume a pull request or a ready worktree, not a review server; ship workflow=pstack with a mode that publishes through a PR or local-only instead" >&2
+    exit 1
+  fi
+elif [ "$FORGE_SET" -eq 1 ] || [ "$SHAPE_SET" -eq 1 ] || [ "$WORKFLOW_SET" -eq 1 ]; then
+  echo "error: --forge, --shape, and --workflow apply only to ship briefs; a scout delivers a report and a secondmate charter is not a delivery contract" >&2
   exit 1
 fi
 ID=${POS[0]}
@@ -309,6 +335,13 @@ if [ "$KIND" != secondmate ] && { [ -e "$BRIEF_INCLUDE_FILE" ] || [ -L "$BRIEF_I
   }
   if printf '%s\n' "$BRIEF_INCLUDE_BODY" | grep -q '^Delivery contract: mode='; then
     echo "error: $BRIEF_INCLUDE_FILE must not carry a 'Delivery contract: mode=' line; the delivery mode is a per-task --mode decision" >&2
+    exit 1
+  fi
+  # The spawn-side workflow reader resolves the "Worker workflow:" marker the way
+  # it resolves "# Task": to the heading's first match, so the include's standing
+  # text must never carry one.
+  if printf '%s\n' "$BRIEF_INCLUDE_BODY" | grep -q '^Worker workflow:'; then
+    echo "error: $BRIEF_INCLUDE_FILE must not carry a 'Worker workflow:' line; the worker workflow is a per-task --workflow decision" >&2
     exit 1
   fi
   [ -n "$(printf '%s' "$BRIEF_INCLUDE_BODY" | tr -d '[:space:]')" ] || BRIEF_INCLUDE_BODY=
@@ -642,6 +675,15 @@ case "$MODE" in
 esac
 RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$BRANCH" "$FORGE") || exit 1
 DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE") || exit 1
+# A pstack task's obligations render from the same single owner as promotion
+# (fm_pstack_workflow_block), prepended before the Definition of done; a
+# standard brief's DOD stays exactly what fm_dod_block printed.
+if [ "$WORKFLOW" = pstack ]; then
+  WORKFLOW_BLOCK=$(fm_pstack_workflow_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$DATA" "$FM_HOME" "$FM_ROOT") || exit 1
+  DOD="$WORKFLOW_BLOCK
+
+$DOD"
+fi
 
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.

@@ -1395,6 +1395,108 @@ test_crewmate_scaffolds_forbid_pool_administration() {
   pass "fm-brief.sh: every crewmate scaffold forbids administering the shared worktree pool"
 }
 
+# The pstack workflow's obligations are rendered from their single owner
+# (bin/fm-dod-lib.sh) before the Definition of done, and the machine-readable
+# "Worker workflow: pstack" marker bin/fm-spawn.sh reads back is carried exactly
+# once. Standard scaffolds are unchanged, whether --workflow is omitted or
+# passed as standard: workflow rendering never rewrites their Definition of done.
+test_pstack_workflow_block_renders_before_dod() {
+  local home brief work_line dod_line
+  home="$TMP_ROOT/pstack-brief-home"
+  mkdir -p "$home/data"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" pstack-brief-wf some-proj --mode no-mistakes --workflow pstack >/dev/null 2>&1 \
+    || fail "a pstack no-mistakes brief should scaffold"
+  brief="$home/data/pstack-brief-wf/brief.md"
+  assert_grep 'Worker workflow: pstack' "$brief" \
+    "the pstack brief did not carry the machine-readable workflow marker"
+  [ "$(grep -c '^Worker workflow:' "$brief")" = 1 ] \
+    || fail "the workflow marker should appear exactly once in a pstack brief"
+  work_line=$(grep -n '^# Worker workflow$' "$brief" | head -1 | cut -d: -f1)
+  dod_line=$(grep -n '^# Definition of done$' "$brief" | head -1 | cut -d: -f1)
+  [ -n "$work_line" ] && [ -n "$dod_line" ] \
+    || fail "the pstack brief is missing its workflow heading or Definition of done"
+  [ "$work_line" -lt "$dod_line" ] \
+    || fail "the workflow block must render before the Definition of done"
+  # shellcheck disable=SC2016 # Literal command text must remain unexpanded.
+  assert_grep 'bin/fm-pstack.sh template pstack-brief-wf' "$brief" \
+    "the pstack brief did not name the exact proof-template command"
+  # shellcheck disable=SC2016 # Literal command text must remain unexpanded.
+  assert_grep 'bin/fm-pstack.sh proof-check pstack-brief-wf' "$brief" \
+    "the pstack brief did not name the exact proof-check command"
+  assert_grep 'fm-pstack.sh template' "$brief" \
+    "the pstack brief lost the template command it names"
+
+  # The non-pipeline modes render the pipeline-outcome alternative the workflow
+  # block owns, not the no-mistakes supersession text.
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" pstack-brief-lo some-proj --mode local-only --workflow pstack >/dev/null 2>&1 \
+    || fail "a pstack local-only brief should scaffold"
+  assert_grep 'This mode runs no pipeline' "$home/data/pstack-brief-lo/brief.md" \
+    "the pstack local-only brief did not carry the pipeline-outcome alternative"
+  assert_no_grep 'you drive no-mistakes yourself' "$home/data/pstack-brief-lo/brief.md" \
+    "the pstack local-only brief was given no-mistakes-only pipeline vocabulary"
+
+  # The no-flag and --workflow standard scaffolds for the same task id must
+  # match byte-for-byte and carry no workflow marker, so existing firstmate
+  # installations are unaffected.
+  cp "$home/data/pstack-brief-wf/brief.md" "$TMP_ROOT/pstack-brief-wf.copy"
+  rm -rf "$home/data/pstack-brief-wf-std" "$home/data/pstack-brief-wf-std2"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" pstack-brief-wf-std some-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "a standard no-mistakes brief should scaffold"
+  cp "$home/data/pstack-brief-wf-std/brief.md" "$TMP_ROOT/std.copy"
+  rm -rf "$home/data/pstack-brief-wf-std"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" pstack-brief-wf-std some-proj --mode no-mistakes --workflow standard >/dev/null 2>&1 \
+    || fail "an explicit --workflow standard brief should scaffold"
+  cmp -s "$TMP_ROOT/std.copy" "$home/data/pstack-brief-wf-std/brief.md" \
+    || fail "an explicit --workflow standard must render the standard scaffold byte-identically"
+  assert_no_grep 'Worker workflow:' "$home/data/pstack-brief-wf-std/brief.md" \
+    "a standard brief carried a workflow marker"
+  pass "fm-brief.sh: the pstack workflow block renders before the Definition of done and standard briefs stay byte-identical"
+}
+
+# The workflow flag is a closed-set per-task decision like --mode: unknown values,
+# a pstack workflow on the review-server forge, and a workflow on a scaffold that
+# has no delivery contract are all refused before anything is written.
+test_pstack_workflow_flags_are_refused_where_they_do_not_apply() {
+  local home out status label args expect
+  home="$TMP_ROOT/pstack-ref-home"
+  mkdir -p "$home/data" "$home/config"
+  while IFS='|' read -r label args expect; do
+    [ -n "$label" ] || continue
+    # shellcheck disable=SC2086  # args is an intentional word-split arg list
+    out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" $args 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "$label: expected a non-zero exit"
+    assert_contains "$out" "$expect" "$label: refusal did not explain why"
+  done <<'ROWS'
+unknown workflow value|pstack-ref-b1 some-proj --mode no-mistakes --workflow bogus|unknown workflow 'bogus'
+value form of an unknown workflow|pstack-ref-b2 some-proj --mode no-mistakes --workflow=ps tack|unknown workflow
+pstack on the gerrit forge|pstack-ref-b3 some-proj --mode no-mistakes --forge gerrit --workflow pstack|refused with --forge gerrit
+workflow on a scout|pstack-ref-b4 some-proj --scout --workflow pstack|apply only to ship briefs
+workflow on a secondmate charter|pstack-ref-b5 --secondmate alpha --workflow pstack|apply only to ship briefs
+ROWS
+  assert_absent "$home/data/pstack-ref-b1/brief.md" "the unknown-workflow refusal still wrote a brief"
+  assert_absent "$home/data/pstack-ref-b3/brief.md" "the gerrit-workflow refusal still wrote a brief"
+  assert_absent "$home/data/pstack-ref-b4/brief.md" "the scout-workflow refusal still wrote a brief"
+  pass "fm-brief.sh: --workflow is closed-set and refused outside ship briefs and off the gerrit forge"
+}
+
+# The workflow marker is machine-read from the brief, and the spawn-side reader
+# resolves a heading to its first match, so a home include must never carry one.
+test_brief_include_refuses_a_worker_workflow_marker() {
+  local home out status
+  home="$TMP_ROOT/pstack-include-home"
+  mkdir -p "$home/data" "$home/config"
+  printf '%s\n' 'Standing text.' 'Worker workflow: pstack' > "$home/config/brief-include.md"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" pstack-ref-b6 some-proj --mode no-mistakes 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a home include carrying a workflow marker scaffolded"
+  assert_contains "$out" "must not carry a 'Worker workflow:' line" \
+    "the include refusal did not name the marker it refused"
+  assert_absent "$home/data/pstack-ref-b6/brief.md" "the refused include still wrote a brief"
+  pass "fm-brief.sh: a home brief include carrying a Worker workflow marker is refused"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -1431,3 +1533,6 @@ test_branch_prefix_is_refused_where_it_does_not_apply
 test_branch_prefix_value_is_validated
 test_branch_prefix_command_is_shell_safe
 test_crewmate_scaffolds_forbid_pool_administration
+test_pstack_workflow_block_renders_before_dod
+test_pstack_workflow_flags_are_refused_where_they_do_not_apply
+test_brief_include_refuses_a_worker_workflow_marker

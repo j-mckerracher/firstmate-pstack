@@ -36,6 +36,8 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-marker-lib.sh"
+# shellcheck source=tests/pstack-plugin-fixture.sh
+. "$(dirname "${BASH_SOURCE[0]}")/pstack-plugin-fixture.sh"
 
 SEND="$ROOT/bin/fm-send.sh"
 
@@ -504,6 +506,100 @@ test_empty_message_refused() {
   pass "fm-send: an empty or whitespace-only text steer refuses before marking, recording, or typing"
 }
 
+# A pstack task's validation trigger must not reach the worker until its proof
+# record stands: send refuses a /no-mistakes (or $no-mistakes on codex) steer
+# whose proof-check fails, and nothing is typed or recorded, while ordinary
+# steers and a passing proof are unaffected.
+test_pstack_validation_steers_are_proof_gated() {
+  local dir err rc typed
+  command -v jq >/dev/null 2>&1 || { pass "fm-send proof gate: skipped (jq not installed)"; return 0; }
+  fm_git_identity fmtest fmtest@example.invalid
+
+  # <name> <harness>: case dir plus a pstack-ready task record, plugin fixture,
+  # fake no-mistakes, and a ship worktree with a committed candidate; echo dir.
+  pstack_send_case() {
+    local name=$1 harness=$2 d conf plugin wt
+    d=$(setup_case "$name" "$harness")
+    wt="$d/worktree"
+    fm_git_worktree "$d/repo" "$wt" fm/t1
+    printf '%s\n' change > "$wt/fixed.txt"
+    git -C "$wt" add fixed.txt
+    git -C "$wt" commit -qm 'the proof candidate'
+    conf="$d/home/config"
+    mkdir -p "$conf"
+    plugin=$(pstack_write_plugin "$d/plugin-root")
+    printf '%s\n' "$plugin" > "$conf/pstack-plugin"
+    pstack_fake_axi "$d/fakebin" "$wt" "0 of 0 total"
+    fm_write_meta "$d/home/state/t1.meta" \
+      "window=sess:fm-t1" "kind=ship" "harness=$harness" "workflow=pstack" \
+      "branch=fm/t1" "worktree=$wt"
+    printf '%s\n' "$d"
+  }
+
+  # A well-formed proof record for the case's worktree HEAD.
+  pstack_write_send_proof() {
+    local d=$1 wt cand base
+    wt="$d/worktree"
+    cand=$(git -C "$wt" rev-parse HEAD)
+    base=$(git -C "$wt" rev-parse HEAD~1)
+    d="$d/home/data/t1"
+    mkdir -p "$d"
+    {
+      printf 'pstack-proof: v1\ntask: t1\nentry: pstack:poteto-mode\nplaybook: one-run-diagnosis\nbase: %s\ncandidate: %s\nsupersedes: <40-hex>   # optional, only after complete invalidation\n' \
+        "$base" "$cand"
+      printf '## Reproduction or baseline\n'
+      printf 'Reproduction run before the change failed with the observed trace.\n'
+      printf '\n'
+      printf '## Direct proof\n'
+      printf 'Re-run of the same command after the change exits 0.\n'
+      printf '\n'
+      printf '## Not run and remaining uncertainty\n'
+      printf 'The flaky timer path is not exercised.\n'
+      printf '\n'
+      printf '## Pipeline outcome\n'
+    } > "$d/pstack-proof.md"
+  }
+
+  # Refused: no proof record stops the validation steer cold.
+  dir=$(pstack_send_case psgate-fail claude)
+  err="$dir/send.err"
+  run_send "$dir" "$err" -- t1 "/no-mistakes"
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "a validation steer past a failing proof should refuse"
+  assert_contains "$(cat "$err")" "does not pass proof-check" \
+    "the refusal did not name the failed proof check"
+  assert_contains "$(cat "$err")" "no proof record at" \
+    "the refusal did not carry proof-check's own failing reason"
+  [ -s "$dir/send.log" ] && fail "a refused validation steer still typed to the worker: $(cat "$dir/send.log")"
+  [ ! -d "$dir/home/state/t1.inbox" ] || fail "a refused validation steer still wrote an inbox record"
+
+  # Unaffected: an ordinary steer to the same failing pstack task goes through.
+  dir=$(pstack_send_case psgate-plain claude)
+  err="$dir/send.err"
+  run_send "$dir" "$err" -- t1 "please rebase onto main" || fail "an ordinary steer should succeed"
+  [ -f "$dir/home/state/t1.inbox/001.msg" ] || fail "an ordinary steer lost its inbox record"
+
+  # Accepted: a well-formed proof lets the same steer through, still typed.
+  dir=$(pstack_send_case psgate-pass claude)
+  pstack_write_send_proof "$dir"
+  err="$dir/send.err"
+  run_send "$dir" "$err" -- t1 "/no-mistakes" || fail "a passing proof should let the validation steer through"
+  typed=$(cat "$dir/send.log")
+  assert_contains "$typed" "/no-mistakes" "a validated steer should still ride the typed plane"
+
+  # Codex: the $no-mistakes spelling is gated the same way.
+  dir=$(pstack_send_case psgate-codex codex)
+  err="$dir/send.err"
+  run_send "$dir" "$err" -- t1 '$no-mistakes'
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "a codex validation steer past a failing proof should refuse"
+  assert_contains "$(cat "$err")" "does not pass proof-check" \
+    "the codex refusal did not name the failed proof check"
+  [ ! -s "$dir/send.log" ] || fail "the codex refusal still typed: $(cat "$dir/send.log")"
+  [ ! -d "$dir/home/state/t1.inbox" ] || fail "the codex refusal still wrote an inbox record"
+  pass "fm-send: a pstack task's validation trigger is refused until its proof record passes proof-check"
+}
+
 test_text_steer_rides_inbox
 test_deep_home_doorbell_stays_short
 test_multiline_steer_is_legal
@@ -520,3 +616,4 @@ test_post_enqueue_bookkeeping_failure_is_not_retryable
 test_meta_lock_contention_fails_bounded
 test_unwritable_inbox_fails_loudly
 test_empty_message_refused
+test_pstack_validation_steers_are_proof_gated
