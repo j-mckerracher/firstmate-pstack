@@ -234,6 +234,7 @@ fm_busy_sources_for_harness() {  # <harness>
     devin) adapter=devin-hook ;;
     pi|pi-signed) adapter=pi-ext ;;
     omp) adapter=omp-ext ;;
+    hermes) adapter=hermes-plugin ;;
     kimi*)
       fm_busy_kimi_verified || { printf ''; return 0; }
       adapter='kimi-wire kimi-hook'
