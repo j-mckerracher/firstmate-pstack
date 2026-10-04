@@ -1453,10 +1453,15 @@ detect_local_config() {
       echo "TANGLE: primary checkout on feature branch '$tangle_branch' (expected '$tangle_default'); the work is safe on that ref - restore the primary with: git -C $FM_ROOT checkout $tangle_default, then re-validate the branch in a proper worktree"
     fi
   fi
-  crew=
-  [ -f "$CONFIG/crew-harness" ] && crew=$(tr -d '[:space:]' < "$CONFIG/crew-harness" || true)
+  # config/crew-harness is "<harness> [<model>] [<effort>]" on its first
+  # non-empty, non-comment line (bin/fm-harness.sh owns the format); only the
+  # harness token decides the executable check below.
+  crew_pin=
+  [ -f "$CONFIG/crew-harness" ] \
+    && crew_pin=$(awk '!/^[[:space:]]*(#|$)/ { $1 = $1; print; exit }' "$CONFIG/crew-harness" 2>/dev/null || true)
+  crew=${crew_pin%% *}
   if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] && [ -n "$crew" ] && [ "$crew" != "default" ]; then
-    echo "BOOTSTRAP_INFO: crew harness override active: $crew"
+    echo "BOOTSTRAP_INFO: crew harness override active: $crew_pin"
   fi
   # A configured cursor crew harness needs a cursor executable present, and
   # cursor ships under EITHER installed name. Resolution runs through the

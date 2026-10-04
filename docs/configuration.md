@@ -8,7 +8,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | What you want to configure | Start here |
 | --- | --- |
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
-| Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
+| Task windows, worker tools, and worker models | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
 | Worker workflow (pstack or standard) | [Worker workflow](#worker-workflow-configpstack-plugin) |
 | Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
@@ -765,7 +765,24 @@ Claude's Stop `asyncRewake` hook owns tokenless re-arm cycles, Cursor's stop hoo
 
 ### Choose the worker harness
 
-`config/crew-harness` is a local, gitignored file containing one adapter name for crewmate and scout launches.
+`config/crew-harness` is a local, gitignored file naming the adapter for crewmate and scout launches, optionally followed by model and effort tokens on the same line.
+The first non-empty, non-comment line is parsed as `<harness> [<model>] [<effort>]`, the same format as `config/secondmate-harness` below.
+
+```text
+# provider/model for every worker launched without an explicit profile
+pi anthropic/claude-sonnet-5 medium
+```
+
+For a multi-provider harness such as `pi`, `omp`, or `opencode`, the model token carries the provider as `<provider>/<id>`; a single-provider harness such as `claude` or `codex` takes its own model id.
+A model of `default` keeps the harness's own default model, so `codex default high` pins only the effort.
+A bare `<harness>` remains harness-only, so existing files keep their previous behavior.
+An effort token outside `low`, `medium`, `high`, `xhigh`, `max`, and `ultra` is reported as a warning at spawn and ignored.
+
+The file is re-read on every crewmate or scout spawn, so an edit takes effect at the next worker launch without restarting firstmate.
+Running workers keep the profile they launched with, and a relaunch keeps the task's recorded harness rather than moving it onto the current file.
+The tokens apply only when the spawn resolves its harness from this file: an explicit per-spawn harness starts with clean model and effort defaults, explicit `--model` or `--effort` flags win over the tokens, and while `config/crew-dispatch.json` exists the file is not read automatically at all.
+`fm-harness.sh crew-model` and `fm-harness.sh crew-effort` print the optional tokens.
+
 When pi-signed is selected, Firstmate preserves `FM_PI_HARNESS=pi-signed` and refuses the launch if the selected executable is unavailable rather than falling back to pi; [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns executable resolution and launch mechanics.
 
 Plain Pi launches set `FM_PI_HARNESS=pi`, so a signed primary's environment cannot relabel a plain Pi worker.
@@ -777,9 +794,9 @@ When it is absent or contains `default`, crewmates mirror the firstmate's own ha
 The first non-empty, non-comment line is parsed as `<harness> [<model>] [<effort>]`.
 
 A bare `<harness>` preserves the previous behavior: harness only, with no model or effort launch flag.
-When the harness token is absent or `default`, secondmate launch falls back through `config/crew-harness` and then the primary's own harness, and no model or effort is read from that file.
+When the harness token is absent or `default`, secondmate launch falls back through `config/crew-harness` and then the primary's own harness, and takes only that adapter: no model or effort is read from either file.
 
-`fm-harness.sh secondmate-model` and `fm-harness.sh secondmate-effort` expose only the optional tokens from `config/secondmate-harness`; `config/crew-harness` remains a bare adapter-name file.
+`fm-harness.sh secondmate-model` and `fm-harness.sh secondmate-effort` expose only the optional tokens from `config/secondmate-harness`.
 Changing this pin affects the next secondmate spawn or control-plane relaunch; the relaunch profile rules are owned by [`docs/agent-control.md`](agent-control.md#transactional-relaunch).
 
 ### Per-launch overrides and inherited defaults
@@ -1103,7 +1120,7 @@ This single-provider table is separate from the frozen legacy mapping used by `f
 - An omitted model or effort means the selected harness uses its own default for that axis.
 - OpenCode receives the effort as its default `build` agent's `variant`, keyed to the resolved model, inside the `OPENCODE_CONFIG_CONTENT` JSON its launch already writes (the per-model reasoning-effort field of the config schema, verified on opencode 1.18.32); with no model resolved, the effort is recorded in task metadata but omitted from the launch.
 - Every profile array is an implicit quota-aware choice resolved through `quota-array-dispatch`.
-- If no dispatch rule fits, firstmate resolves `default` through the same object-or-array path before falling back to `config/crew-harness`.
+- If no dispatch rule fits, firstmate resolves `default` through the same object-or-array path before falling back to `config/crew-harness`, passing its harness and any model and effort tokens as explicit flags.
 - Except for `ultra`, which refuses unsupported profiles under the native-effort contract above, an effort value the chosen harness does not accept is recorded as `effort=` in task meta for traceability but omitted from the launch flags.
 - Bootstrap reports unsupported harness/model/effort combinations as a `CREW_DISPATCH` diagnostic when they are visible in the file.
 
