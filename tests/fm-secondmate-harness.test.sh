@@ -41,7 +41,9 @@
 #      fm-spawn.sh populates MODEL/EFFORT from those tokens for a --secondmate
 #      spawn only when the harness also resolves from that file, so the pin is
 #      durable across every respawn while explicit per-spawn harness/model/effort
-#      flags still win.
+#      flags still win. config/crew-harness shares the format for crewmate and
+#      scout launches (fm-harness.sh crew-model / crew-effort), re-read on every
+#      spawn, and a secondmate falling back to it takes the adapter only.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -171,6 +173,46 @@ extra whitespace between tokens is tolerated^grok   grok-4    xhigh^grok^grok-4^
 leading/trailing blank lines and a comment are skipped^# a comment\n\nclaude opus low\n^claude^opus^low
 ROWS
   pass "C1 fm-harness.sh secondmate-model/secondmate-effort resolve the optional tokens; bare harness stays empty (backward-compat)"
+}
+
+# config/crew-harness shares the "<harness> [<model>] [<effort>]" format. Each row
+# writes crew-harness (ABSENT skips it) and asserts the crew harness, crew model,
+# and crew effort, plus that a secondmate falling back to the crew harness takes
+# the adapter only and never the crew model or effort.
+#   <label>^<file-line-or-ABSENT>^<expect-harness>^<expect-model>^<expect-effort>
+test_crew_model_effort_tokens() {
+  local label line exp_harness exp_model exp_effort case_dir cfg got_h got_m got_e got_sm got_smm got_sme n
+  n=0
+  while IFS='^' read -r label line exp_harness exp_model exp_effort; do
+    [ -n "$label" ] || continue
+    n=$((n + 1))
+    case_dir="$TMP_ROOT/crew-tokens-$n"
+    cfg="$case_dir/config"
+    mkdir -p "$cfg"
+    [ "$line" = ABSENT ] || printf '%b\n' "$line" > "$cfg/crew-harness"
+    got_h=$(PATH="$BLIND_BIN:$BASE_PATH" CLAUDECODE=1 FM_CONFIG_OVERRIDE="$cfg" "$ROOT/bin/fm-harness.sh" crew)
+    got_m=$(PATH="$BLIND_BIN:$BASE_PATH" CLAUDECODE=1 FM_CONFIG_OVERRIDE="$cfg" "$ROOT/bin/fm-harness.sh" crew-model)
+    got_e=$(PATH="$BLIND_BIN:$BASE_PATH" CLAUDECODE=1 FM_CONFIG_OVERRIDE="$cfg" "$ROOT/bin/fm-harness.sh" crew-effort)
+    got_sm=$(PATH="$BLIND_BIN:$BASE_PATH" CLAUDECODE=1 FM_CONFIG_OVERRIDE="$cfg" "$ROOT/bin/fm-harness.sh" secondmate)
+    got_smm=$(PATH="$BLIND_BIN:$BASE_PATH" CLAUDECODE=1 FM_CONFIG_OVERRIDE="$cfg" "$ROOT/bin/fm-harness.sh" secondmate-model)
+    got_sme=$(PATH="$BLIND_BIN:$BASE_PATH" CLAUDECODE=1 FM_CONFIG_OVERRIDE="$cfg" "$ROOT/bin/fm-harness.sh" secondmate-effort)
+    [ "$got_h" = "$exp_harness" ] || fail "$label: crew harness resolved '$got_h', expected '$exp_harness'"
+    [ "$got_m" = "$exp_model" ] || fail "$label: crew model resolved '$got_m', expected '$exp_model'"
+    [ "$got_e" = "$exp_effort" ] || fail "$label: crew effort resolved '$got_e', expected '$exp_effort'"
+    [ "$got_sm" = "$exp_harness" ] || fail "$label: secondmate fallback resolved '$got_sm', expected '$exp_harness'"
+    [ -z "$got_smm$got_sme" ] || fail "$label: secondmate fallback picked up crew tokens '$got_smm' '$got_sme'"
+  done <<'ROWS'
+absent file -> own harness, empty model/effort^ABSENT^claude^^
+bare harness only -> empty model/effort (backward-compat)^codex^codex^^
+harness + model -> model only^codex gpt-5.5^codex^gpt-5.5^
+harness + model + effort -> both^codex gpt-5.5 high^codex^gpt-5.5^high
+multi-provider harness keeps its provider/model token^pi anthropic/claude-sonnet-5 medium^pi^anthropic/claude-sonnet-5^medium
+default model placeholder pins effort only^codex default xhigh^codex^default^xhigh
+default harness token -> own harness, tokens ignored^default opus high^claude^^
+extra whitespace between tokens is tolerated^grok   grok-4    low^grok^grok-4^low
+leading/trailing blank lines and a comment are skipped^# a comment\n\ncodex gpt-5.5 low\n^codex^gpt-5.5^low
+ROWS
+  pass "C1b fm-harness.sh crew-model/crew-effort resolve config/crew-harness tokens; a secondmate fallback takes the adapter only"
 }
 
 # ===========================================================================
@@ -1050,6 +1092,96 @@ EOF
   assert_not_contains "$launch" "--model" "crew-unaffected: crew launch must not carry a --model flag"
   assert_not_contains "$launch" "--effort" "crew-unaffected: crew launch must not carry an --effort flag"
   pass "C9 spawn: the harness fallback chain still resolves with no tokens; crew/scout launches are unaffected by this feature"
+}
+
+# spawn_crew_capture <world> <id> <launchlog> [extra fm-spawn.sh args...]
+# Spawns an ordinary ship task from <world>/home with no harness argument, so the
+# harness resolves from config/crew-harness, capturing the launch command.
+spawn_crew_capture() {
+  local world=$1 id=$2 launchlog=$3 home proj wt fakebin
+  shift 3
+  home="$world/home"
+  proj="$world/project-$id"
+  wt="$world/wt-$id"
+  fakebin=$(make_launch_capturing_tmux "$world/tmux-$id")
+  fm_git_worktree "$proj" "$wt" "wt-$id"
+  mkdir -p "$home/data/$id" "$home/projects" "$home/state"
+  cat > "$home/data/$id/brief.md" <<'EOF'
+# Task
+## Captain's intent
+Exercise a crew launch that resolves its profile from config.
+
+## Firstmate spec
+Verify the crew harness file's model and effort tokens reach the launch.
+EOF
+  : > "$launchlog"
+  PATH="$fakebin:$BASE_PATH" TMUX="fake,1,0" CLAUDECODE=1 \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" FM_FAKE_LAUNCH_LOG="$launchlog" \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" --mode no-mistakes --yolo off "$@"
+}
+
+# config/crew-harness "<harness> <model> <effort>" threads both axes into a crew
+# launch and its meta; an edit to the file applies to the very next spawn with no
+# restart; explicit --model/--effort still win; and a secondmate falling back to
+# the crew harness takes the adapter only.
+test_spawn_crew_harness_model_effort_tokens() {
+  local w meta launchlog launch out status sm
+  w="$TMP_ROOT/spawn-crew-tokens"
+  launchlog="$w/launch.log"
+  mkdir -p "$w/home/config"
+
+  printf 'codex gpt-5.5 high\n' > "$w/home/config/crew-harness"
+  out=$(spawn_crew_capture "$w" crew-tokens-a1 "$launchlog" 2>&1); status=$?
+  expect_code 0 "$status" "crew-tokens: first crew spawn should succeed"$'\n'"$out"
+  meta="$w/home/state/crew-tokens-a1.meta"
+  [ "$(meta_field "$meta" harness)" = codex ] || fail "crew-tokens: meta harness not codex"
+  [ "$(meta_field "$meta" model)" = gpt-5.5 ] || fail "crew-tokens: meta model not gpt-5.5 (got '$(meta_field "$meta" model)')"
+  [ "$(meta_field "$meta" effort)" = high ] || fail "crew-tokens: meta effort not high (got '$(meta_field "$meta" effort)')"
+  launch=$(cat "$launchlog")
+  assert_contains "$launch" "--model 'gpt-5.5'" "crew-tokens: launch did not carry --model gpt-5.5"
+  assert_contains "$launch" "model_reasoning_effort=\"high\"" "crew-tokens: launch did not carry effort high"
+
+  # Hot reload: change the file, spawn again, no restart in between.
+  printf 'codex gpt-5.6-luna low\n' > "$w/home/config/crew-harness"
+  out=$(spawn_crew_capture "$w" crew-tokens-b2 "$launchlog" 2>&1); status=$?
+  expect_code 0 "$status" "crew-tokens: second crew spawn should succeed"$'\n'"$out"
+  meta="$w/home/state/crew-tokens-b2.meta"
+  [ "$(meta_field "$meta" model)" = gpt-5.6-luna ] || fail "crew-tokens: edited model not picked up (got '$(meta_field "$meta" model)')"
+  [ "$(meta_field "$meta" effort)" = low ] || fail "crew-tokens: edited effort not picked up (got '$(meta_field "$meta" effort)')"
+  launch=$(cat "$launchlog")
+  assert_contains "$launch" "--model 'gpt-5.6-luna'" "crew-tokens: edited model did not reach the next launch"
+  assert_not_contains "$launch" "gpt-5.5" "crew-tokens: the next launch still carried the old model"
+  [ "$(meta_field "$w/home/state/crew-tokens-a1.meta" model)" = gpt-5.5 ] \
+    || fail "crew-tokens: editing the file rewrote an already-launched task's recorded model"
+
+  # Explicit per-spawn axes win over the file.
+  out=$(spawn_crew_capture "$w" crew-tokens-c3 "$launchlog" --model gpt-5.5 --effort medium 2>&1); status=$?
+  expect_code 0 "$status" "crew-tokens: explicit-axes crew spawn should succeed"$'\n'"$out"
+  meta="$w/home/state/crew-tokens-c3.meta"
+  [ "$(meta_field "$meta" model)" = gpt-5.5 ] || fail "crew-tokens: explicit --model did not win (got '$(meta_field "$meta" model)')"
+  [ "$(meta_field "$meta" effort)" = medium ] || fail "crew-tokens: explicit --effort did not win (got '$(meta_field "$meta" effort)')"
+
+  # An invalid effort token warns and is ignored rather than launched.
+  printf 'codex gpt-5.5 turbo\n' > "$w/home/config/crew-harness"
+  out=$(spawn_crew_capture "$w" crew-tokens-d4 "$launchlog" 2>&1); status=$?
+  expect_code 0 "$status" "crew-tokens: invalid-effort crew spawn should still launch"$'\n'"$out"
+  assert_contains "$out" "config/crew-harness effort token 'turbo'" "crew-tokens: invalid effort was not reported"
+  [ "$(meta_field "$w/home/state/crew-tokens-d4.meta" effort)" = default ] \
+    || fail "crew-tokens: invalid effort token was recorded"
+
+  # A secondmate falling back to the crew harness takes the adapter only.
+  printf 'codex gpt-5.5 high\n' > "$w/home/config/crew-harness"
+  sm="$w/sm"
+  make_seeded_home "$sm" sm
+  spawn_secondmate_capture "$w" sm "$sm" "$launchlog" >/dev/null 2>&1
+  meta="$w/home/state/sm.meta"
+  [ "$(meta_field "$meta" harness)" = codex ] || fail "crew-tokens: secondmate did not fall back to the crew harness"
+  [ "$(meta_field "$meta" model)" = default ] || fail "crew-tokens: secondmate fallback inherited the crew model"
+  [ "$(meta_field "$meta" effort)" = default ] || fail "crew-tokens: secondmate fallback inherited the crew effort"
+  pass "C10 spawn: config/crew-harness model/effort tokens reach crew launches, apply on the next spawn after an edit, and stay out of secondmate fallback"
 }
 
 # ===========================================================================
@@ -2721,6 +2853,7 @@ SH
 test_harness_resolution
 test_cursor_marker_detection
 test_secondmate_model_effort_tokens
+test_crew_model_effort_tokens
 test_pi_signed_detection_and_session_lock_identity
 test_dash_leading_process_names_are_basename_operands
 test_propagate_lib
@@ -2741,6 +2874,7 @@ test_spawn_explicit_harness_does_not_inherit_secondmate_harness_tokens
 test_spawn_explicit_harness_uses_explicit_profile_axes
 test_spawned_secondmate_uses_its_harness_supervision_model
 test_spawn_fallback_chain_and_crew_scout_unaffected
+test_spawn_crew_harness_model_effort_tokens
 test_bootstrap_sweep_propagates_and_reconverges
 test_bootstrap_sweep_propagates_when_tracked_current
 test_bootstrap_sweep_defers_dispatch_on_stale_unignored_home

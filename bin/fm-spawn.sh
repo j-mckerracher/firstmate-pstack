@@ -180,7 +180,11 @@
 #   that lock itself rather than failing to resolve one;
 #   contention refuses rather than waits.
 #   With no harness arg, a crewmate/scout spawn resolves the CREW harness only when
-#   config/crew-dispatch.json is absent. When that file exists, crewmate/scout
+#   config/crew-dispatch.json is absent, together with any optional model and effort
+#   tokens on config/crew-harness ("<harness> [<model>] [<effort>]", the same format
+#   and precedence as config/secondmate-harness below); the file is re-read on every
+#   spawn, so an edit applies to the next worker with no restart, while running
+#   workers and relaunches keep their recorded profile. When that file exists, crewmate/scout
 #   spawns require an explicit harness so firstmate cannot silently skip dispatch
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
@@ -2434,23 +2438,34 @@ agy)
   ;;
 esac
 
-# config/secondmate-harness may carry optional model/effort tokens alongside the
-# harness ("<harness> [<model>] [<effort>]"). They apply only when this is a
-# --secondmate spawn and no explicit per-spawn harness/raw launch was supplied, so
-# the harness itself came from the secondmate config fallback chain. Resolving
-# here on every spawn makes the pin durable across respawns. Precedence: explicit
-# --model/--effort flags still win over the file's tokens.
-if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
+# config/crew-harness and config/secondmate-harness may carry optional
+# model/effort tokens alongside the harness ("<harness> [<model>] [<effort>]").
+# They apply only when no explicit per-spawn harness/raw launch was supplied, so
+# the harness itself came from that kind's config: config/secondmate-harness for a
+# --secondmate spawn, config/crew-harness for a crewmate or scout (reachable only
+# while config/crew-dispatch.json is absent, and never on a relaunch, which keeps
+# its recorded harness). Resolving here on every spawn is what makes an edit to
+# either file take effect at the next spawn with no restart, and keeps a
+# secondmate pin durable across respawns. Precedence: explicit --model/--effort
+# flags still win over the file's tokens.
+if [ -z "$ARG3" ]; then
+  if [ "$KIND" = secondmate ]; then
+    PIN_FILE=secondmate-harness
+    PIN_VERB=secondmate
+  else
+    PIN_FILE=crew-harness
+    PIN_VERB=crew
+  fi
   if [ "$MODEL_SET" -eq 0 ]; then
-    SM_MODEL=$("$SCRIPT_DIR/fm-harness.sh" secondmate-model)
-    [ -z "$SM_MODEL" ] || MODEL=$SM_MODEL
+    PIN_MODEL=$("$SCRIPT_DIR/fm-harness.sh" "$PIN_VERB-model")
+    [ -z "$PIN_MODEL" ] || MODEL=$PIN_MODEL
   fi
   if [ "$EFFORT_SET" -eq 0 ]; then
-    SM_EFFORT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-effort)
-    if [ -n "$SM_EFFORT" ]; then
-      case "$SM_EFFORT" in
-      low | medium | high | xhigh | max | ultra) EFFORT=$SM_EFFORT ;;
-      *) echo "warning: config/secondmate-harness effort token '$SM_EFFORT' is not one of low, medium, high, xhigh, max, ultra; ignoring" >&2 ;;
+    PIN_EFFORT=$("$SCRIPT_DIR/fm-harness.sh" "$PIN_VERB-effort")
+    if [ -n "$PIN_EFFORT" ]; then
+      case "$PIN_EFFORT" in
+      low | medium | high | xhigh | max | ultra) EFFORT=$PIN_EFFORT ;;
+      *) echo "warning: config/$PIN_FILE effort token '$PIN_EFFORT' is not one of low, medium, high, xhigh, max, ultra; ignoring" >&2 ;;
       esac
     fi
   fi
