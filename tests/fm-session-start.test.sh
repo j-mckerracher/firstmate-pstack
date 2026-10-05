@@ -39,6 +39,8 @@ set -u
 SESSION_START="$ROOT/bin/fm-session-start.sh"
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 TMP_ROOT=$(fm_test_tmproot fm-session-start-tests)
+# shellcheck source=tests/prime-process-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/prime-process-helpers.sh"
 SESSION_START_TEST_HARNESS_PID=$$
 SESSION_START_SECOND_MATE_ID="fmtest-sm-${TMP_ROOT##*.}"
 SESSION_START_SECOND_MATE_TMP="/tmp/fm-$SESSION_START_SECOND_MATE_ID"
@@ -3014,6 +3016,56 @@ EOF
   pass "session start rejects Pi loaded markers from previous sessions"
 }
 
+test_prime_read_only_startup_preserves_operational_records() {
+  local rec root home fakebin out rc shape before after
+  for shape in no-anchor live-owner; do
+    rec=$(new_world "prime-read-only-$shape")
+    IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+    make_fake_toolchain "$fakebin"
+    fm_test_prime_ps "$fakebin"
+    printf '900\n' > "$home/state/.lock"
+    printf 'foreign-fixture-session\n' > "$home/state/.lock-session"
+    printf 'trace-fixture\n' > "$home/state/.trace-context-effective"
+    append_wake "$home/state" signal task-a "done: leave queued" || fail "Prime startup wake seed failed"
+    cp "$home/state/.lock" "$home/lock-before"
+    cp "$home/state/.lock-session" "$home/session-before"
+    cp "$home/state/.wake-queue" "$home/wake-before"
+    cp "$home/state/.trace-context-effective" "$home/trace-before"
+    before=$(find "$home/state" "$home/data" "$home/config" -type f -exec cksum {} \; | sort)
+    local -a assignments=()
+    [ "$shape" != no-anchor ] || assignments+=(FM_TEST_PRIME_CHAIN=detached)
+    rc=0
+    out=$(fm_test_prime_eval "$home" "$fakebin" '"$0/bin/fm-session-start.sh"' \
+      "FM_ROOT_OVERRIDE=$root" ${assignments[@]+"${assignments[@]}"}) || rc=$?
+    expect_code 0 "$rc" "Prime read-only startup did not complete its safe digest"
+    assert_contains "$out" "READ-ONLY SESSION" "Prime startup did not announce unverified ownership"
+    if [ "$shape" = no-anchor ]; then
+      assert_contains "$out" "cannot locate harness process in ancestry" "Prime startup lost its missing-anchor diagnostic"
+    else
+      assert_contains "$out" "another live firstmate session holds the lock" "Prime startup lost its live-owner diagnostic"
+      assert_not_contains "$out" "cannot locate harness process in ancestry" "legitimate Prime startup never reached owner refusal"
+    fi
+    assert_contains "$out" "Skipping every mutating step" "Prime read-only startup allowed mutation"
+    assert_contains "$out" "skipped (read-only session)" "Prime startup failed to leave deferred work alone"
+    assert_not_contains "$out" "SECONDMATE_SYNC" "Prime read-only startup ran secondmate sync"
+    assert_not_contains "$out" "NUDGE_SECONDMATES" "Prime read-only startup nudged a secondmate"
+    cmp -s "$home/lock-before" "$home/state/.lock" || fail "Prime read-only startup changed its competing owner"
+    cmp -s "$home/session-before" "$home/state/.lock-session" || fail "Prime read-only startup changed the owner sidecar"
+    cmp -s "$home/wake-before" "$home/state/.wake-queue" || fail "Prime read-only startup drained queued wakes"
+    cmp -s "$home/trace-before" "$home/state/.trace-context-effective" || fail "Prime read-only startup changed frozen trace context"
+    after=$(find "$home/state" "$home/data" "$home/config" -type f -exec cksum {} \; | sort)
+    [ "$before" = "$after" ] || fail "Prime read-only startup added, removed, or rewrote an operational record"
+    [ ! -e "$home/state/.startup-network.status" ] || fail "Prime read-only startup started deferred work"
+    [ ! -e "$home/state/home-summary.json" ] || fail "Prime read-only startup published a home summary"
+    [ ! -e "$home/state/.lock.acquire" ] || fail "Prime read-only startup left a claim lock"
+  done
+  pass "Prime startup without verified ownership preserves operational records and queued wakes"
+}
+
+test_prime_read_only_startup_preserves_operational_records
+[ "${1:-}" != --prime-only ] || exit 0
 test_context_digest_absent_empty_present
 test_lock_refusal_read_only_path
 test_lock_write_failure_read_only_path

@@ -23,6 +23,9 @@ jq -e '
   ([.harnesses[] | select(type != "string")] | length == 0)
 ' "$ROUTING_JSON" >/dev/null || fail "harness adapter routing artifact is not a normalized operation and harness map"
 
+jq -e '.harnesses | (has("prime-agent") | not) and (has("pa-daemon") | not)' \
+  "$ROUTING_JSON" >/dev/null || fail "primary-only Prime was registered as a worker adapter"
+
 jq -r '.operations[][][], .harnesses[]' "$ROUTING_JSON" | sort -u | while IFS= read -r path; do
   [ -r "$ROOT/.agents/skills/harness-adapters/$path" ] \
     || fail "harness adapter routing target is unreadable: $path"

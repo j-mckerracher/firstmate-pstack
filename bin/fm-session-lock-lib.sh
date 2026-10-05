@@ -55,6 +55,80 @@ fm_harness_path_name() {  # <path>
   return 1
 }
 
+# Prime's native CLI can run tools directly; its daemon supervisor cannot.
+# Standalone pa-daemon is an agent only in its first-argument worker mode.
+_fm_prime_argv_matches() {  # <comm> <argv0> [args...]
+  local base=${1##*/} argv0=${2:-} token
+  case "$base" in prime-agent|pa-daemon) ;; *) return 1 ;; esac
+  [ "${argv0##*/}" = "$base" ] || return 1
+  shift 2
+  if [ "$base" = pa-daemon ]; then
+    [ "${1:-}" = worker ]
+    return
+  fi
+  while [ "$#" -gt 0 ]; do
+    token=$1
+    shift
+    case "$token" in
+      --) break ;;
+      --mode=daemon) return 1 ;;
+      --mode) [ "${1:-}" != daemon ] || return 1 ;;
+    esac
+  done
+  return 0
+}
+
+# Keep argv boundaries when available; flattened ps output is conservative.
+# Neither a path component nor a supplied argument can substitute for comm.
+fm_prime_process_matches() {  # <comm> <args> [argv0] [pid]
+  local comm=${1:-} args=${2:-} argv0=${3:-} pid=${4:-}
+  local proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc} token count=0
+  local -a argv=()
+  case "${comm##*/}" in prime-agent|pa-daemon) ;; *) return 1 ;; esac
+  case "$pid" in
+    '') ;;
+    *[!0-9]*) return 1 ;;
+    *)
+      if [ -r "$proc_root/$pid/cmdline" ]; then
+        while IFS= read -r -d '' token; do
+          argv+=("$token")
+          count=$((count + 1))
+        done < "$proc_root/$pid/cmdline"
+        [ "$count" -gt 0 ] || return 1
+        _fm_prime_argv_matches "$comm" "${argv[@]}"
+        return
+      fi
+      ;;
+  esac
+  args=${args#"${args%%[![:space:]]*}"}
+  [ -n "$args" ] || return 1
+  case "$args" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  if [ -n "$argv0" ]; then
+    case "$args" in
+      "$argv0"|"$argv0"[[:space:]]*) args=${args#"$argv0"} ;;
+      *)
+        token=${args%%[[:space:]]*}
+        [ "${token##*/}" = "${argv0##*/}" ] || return 1
+        argv0=$token
+        args=${args#"$argv0"}
+        ;;
+    esac
+  else
+    argv0=${args%%[[:space:]]*}
+    args=${args#"$argv0"}
+  fi
+  IFS=$' \t\n' read -r -a argv <<< "$args"
+  _fm_prime_argv_matches "$comm" "$argv0" ${argv[@]+"${argv[@]}"}
+}
+
+fm_prime_pid_is_agent() {  # <pid>
+  local pid=${1:-} comm args
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
+  args=$(ps -o args= -p "$pid" 2>/dev/null) || return 1
+  fm_prime_process_matches "$comm" "$args" '' "$pid"
+}
+
 # True when the process described by command name $1 and full argument string $2
 # is a verified harness. Sets FM_HARNESS_IS_CLAUDE for the ancestry walk.
 #
@@ -67,11 +141,15 @@ fm_harness_path_name() {  # <path>
 #      is identified by its install path on macOS and by argv[0] on Linux.
 #   3. a bare interpreter (node, python) running a harness script path.
 #   4. Cursor's own structural identity, owned by bin/fm-cursor-lib.sh.
+# Prime is checked separately before these broader adapter rules.
 FM_HARNESS_IS_CLAUDE=0
-fm_harness_process_matches() {  # <comm> <args>
+fm_harness_process_matches() {  # <comm> <args> [pid]
   local comm=$1 args=$2 base argv0 name
   FM_HARNESS_IS_CLAUDE=0
   base=$(basename -- "$comm")
+  case "$base" in
+    prime-agent|pa-daemon) fm_prime_process_matches "$comm" "$args" '' "${3:-}"; return ;;
+  esac
   if printf '%s' "$base" | grep -qE "$FM_HARNESS_RE"; then
     case "$base" in *claude*) FM_HARNESS_IS_CLAUDE=1 ;; esac
     return 0
@@ -121,7 +199,7 @@ fm_harness_ancestry_pids() {
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
     args=$(ps -o args= -p "$pid" 2>/dev/null)
-    if fm_harness_process_matches "$comm" "$args"; then
+    if fm_harness_process_matches "$comm" "$args" "$pid"; then
       printf '%s\n' "$pid"
       printed=1
       [ "$FM_HARNESS_IS_CLAUDE" -eq 1 ] || break
@@ -169,7 +247,7 @@ fm_harness_pid_alive() {
   kill -0 "$pid" 2>/dev/null || return 1
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
   args=$(ps -o args= -p "$pid" 2>/dev/null)
-  fm_harness_process_matches "$comm" "$args"
+  fm_harness_process_matches "$comm" "$args" "$pid"
 }
 
 # --- trusted same-session identity -------------------------------------------
@@ -210,7 +288,7 @@ fm_session_lock_trusted_session_id() {  # [<ancestry-pids>]
     [ "$pid" = "$claude_pid" ] || continue
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
     args=$(ps -o args= -p "$pid" 2>/dev/null)
-    fm_harness_process_matches "$comm" "$args" || return 1
+    fm_harness_process_matches "$comm" "$args" "$pid" || return 1
     [ "$FM_HARNESS_IS_CLAUDE" -eq 1 ] || return 1
     printf '%s\n' "$id"
     return 0

@@ -726,6 +726,22 @@ A local standalone-clone home cannot receive a primary-local commit through that
 
 claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, and omp are empirically verified for crewmate and secondmate launches; gemini is verified for crewmate and scout launches only, and [README requirements](../README.md#requirements) own the set supported for the primary session.
 
+### Prime (primary only)
+
+Firstmate recognizes an exact native `prime-agent` executable, either the interactive/session worker or the CLI that runs tools directly in print, JSON, or RPC mode.
+Standalone `pa-daemon worker` is also recognized as Prime; `prime-agent --mode daemon`, `pa-daemon supervisor`, and `pa-tui-replay` are not session owners.
+The Python kernel and shell between a Prime process and its tool commands do not establish identity themselves.
+Recognition uses process evidence, not inherited environment markers or a directory named `prime-agent`.
+This support establishes primary-session identity and existing ownership checks only, not a Prime launch/control adapter, automatic startup hook, or verified unattended supervision.
+
+`prime-agent` cannot be selected for crew, scout, secondmate, or pstack dispatch.
+In a Prime primary, an absent or `default` `config/crew-harness` reports an explicit configuration error instead of dispatching Prime.
+Select an already verified worker harness in the effective home's `config/crew-harness`, for example a bare `claude` or `pi`.
+Secondmate selection may inherit that supported crew value, or use an explicit harness verified for secondmates in `config/secondmate-harness`.
+An explicit `prime-agent` in either file is also refused.
+Existing supported primaries retain their own-harness defaults.
+Do not create another Prime worker, change the session lock, or claim another home's fleet to work around an ownership refusal.
+
 ### Harness restrictions and credentials
 
 `fm-spawn.sh` refuses kimi on cmux and Orca at preflight, because answering Kimi's folder-trust dialog needs a verified viewport-only capture those backends lack; [its adapter reference](../.agents/skills/harness-adapters/references/harness/kimi.md#readiness-gated-start) owns the trust-dialog handling.
@@ -786,7 +802,7 @@ The tokens apply only when the spawn resolves its harness from this file: an exp
 When pi-signed is selected, Firstmate preserves `FM_PI_HARNESS=pi-signed` and refuses the launch if the selected executable is unavailable rather than falling back to pi; [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns executable resolution and launch mechanics.
 
 Plain Pi launches set `FM_PI_HARNESS=pi`, so a signed primary's environment cannot relabel a plain Pi worker.
-When it is absent or contains `default`, crewmates mirror the firstmate's own harness.
+When it is absent or contains `default`, crewmates mirror the firstmate's own harness, except [primary-only Prime](#prime-primary-only), which requires an explicit supported worker selection.
 
 ### Choose the secondmate harness
 
@@ -794,7 +810,7 @@ When it is absent or contains `default`, crewmates mirror the firstmate's own ha
 The first non-empty, non-comment line is parsed as `<harness> [<model>] [<effort>]`.
 
 A bare `<harness>` preserves the previous behavior: harness only, with no model or effort launch flag.
-When the harness token is absent or `default`, secondmate launch falls back through `config/crew-harness` and then the primary's own harness, and takes only that adapter: no model or effort is read from either file.
+When the harness token is absent or `default`, secondmate launch falls back through `config/crew-harness` and then the primary's own dispatchable harness, and takes only that adapter: no model or effort is read from either file.
 
 `fm-harness.sh secondmate-model` and `fm-harness.sh secondmate-effort` expose only the optional tokens from `config/secondmate-harness`.
 Changing this pin affects the next secondmate spawn or control-plane relaunch; the relaunch profile rules are owned by [`docs/agent-control.md`](agent-control.md#transactional-relaunch).

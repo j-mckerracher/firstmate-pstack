@@ -59,6 +59,7 @@ Full detail on every feature lives in [docs/architecture.md](docs/architecture.m
 ### Requirements
 
 - A verified primary agent harness: Claude Code, Grok, Pi, `pi-signed`, Oh My Pi (`omp`), Codex, OpenCode, or Cursor Agent CLI.
+- Prime (`prime-agent`) can also run a manually started primary session, with the [primary-only limits](docs/configuration.md#prime-primary-only) below.
 - Git and the GitHub CLI, authenticated through `gh auth login`.
 - The CLI and dependencies for your selected runtime backend; tmux is the reference default.
 
@@ -116,6 +117,18 @@ FM_OMP_HARNESS=omp omp
 ```
 
 Start `omp` with this checkout as its working directory: it auto-discovers the tracked `.omp/extensions/*.ts` files with no trust dialog, and naming them with `-e` as well would load each twice.
+
+**Prime (primary only)**
+
+```sh
+prime-agent
+```
+
+Launch the installed native Prime CLI in this checkout, using `FM_HOME` if the operational home is separate.
+Read `AGENTS.md` and run `bin/fm-session-start.sh` once from that Prime session if no startup digest is present.
+Firstmate recognizes Prime's CLI and session workers, not its shared supervisor; this does not install a Prime startup hook or verify unattended supervision.
+Before dispatching work, select an existing verified worker adapter as described under [Prime's primary-only boundary](docs/configuration.md#prime-primary-only).
+An ownership refusal still requires read-only operation, never a replacement worker or a lock bypass.
 
 For Grok, `--trust` is needed once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok works too.
 For Pi, approve the project trust prompt once per clone on first launch so the tracked `.pi/extensions/*.ts` files auto-load.

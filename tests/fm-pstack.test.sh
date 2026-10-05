@@ -184,14 +184,17 @@ test_resolve_hooks_and_mcp_detection() {
 }
 
 test_resolve_unsupported_harness_is_exit_5() {
-  set_cfg "$VALID_PLUGIN"
-  plugin_resolve codex
-  expect_code 5 "$?" "unsupported harness exit code"
-  assert_contains "$out" "not supported on harness" "unsupported harness error message"
-  # The harness matrix is checked before any configuration read: no config file.
-  rm_cfg
-  plugin_resolve codex
-  expect_code 5 "$?" "unsupported harness exit code without config"
+  local harness
+  for harness in codex prime-agent pa-daemon; do
+    set_cfg "$VALID_PLUGIN"
+    plugin_resolve "$harness"
+    expect_code 5 "$?" "$harness unsupported pstack harness exit code"
+    assert_contains "$out" "not supported on harness" "$harness unsupported harness error message"
+    # The harness matrix is checked before any configuration read: no config file.
+    rm_cfg
+    plugin_resolve "$harness"
+    expect_code 5 "$?" "$harness unsupported harness exit code without config"
+  done
   pass "unsupported harness refuses with exit 5 before reading config"
 }
 

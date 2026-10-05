@@ -36,6 +36,8 @@ HARNESS="$ROOT/bin/fm-harness.sh"
 RENDER="$ROOT/bin/fm-supervision-instructions.sh"
 TMP_ROOT=$(fm_test_tmproot fm-harness-precedence)
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
+# shellcheck source=tests/prime-process-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/prime-process-helpers.sh"
 
 # A real process named after a harness, asked for its verdict from a child.
 # The command substitution around the probe is load-bearing: a bare `-c <cmd>`
@@ -826,6 +828,90 @@ test_supervision_protocol_follows_corrected_verdict() {
   pass "session start renders the Codex protocol for a Codex primary holding a retained CLAUDECODE"
 }
 
+test_prime_primary_identity_outranks_retained_markers() {
+  local dir fakebin comm args got marker
+  dir="$TMP_ROOT/prime-primary"
+  fakebin=$(fm_fakebin "$dir")
+  fm_test_prime_ps "$fakebin"
+  while IFS='|' read -r comm args; do
+    got=$(fm_test_prime_eval "$dir/home" "$fakebin" '"$0/bin/fm-harness.sh" ancestry 740' \
+      "FM_TEST_PRIME_COMM=$comm" "FM_TEST_PRIME_ARGS=$args")
+    [ "$got" = "comm prime-agent" ] \
+      || fail "Prime ancestry '$comm' / '$args' resolved '$got', expected structural prime-agent"
+    for marker in '' CLAUDECODE=1 CURSOR_AGENT=1 PI_CODING_AGENT=true GROK_AGENT=1; do
+      local -a assignments=()
+      [ -z "$marker" ] || assignments+=("$marker")
+      got=$(fm_test_prime_eval "$dir/home" "$fakebin" '"$0/bin/fm-harness.sh"' \
+        "FM_TEST_PRIME_COMM=$comm" "FM_TEST_PRIME_ARGS=$args" ${assignments[@]+"${assignments[@]}"})
+      [ "$got" = prime-agent ] \
+        || fail "Prime identity with marker '$marker' resolved '$got', expected prime-agent"
+    done
+  done <<'CASES'
+prime-agent|/fixture/bin/prime-agent worker
+/fixture/share/prime-agent/prime-agent|/fixture/share/prime-agent/prime-agent worker
+pa-daemon|/fixture/bin/pa-daemon worker
+prime-agent|/fixture/bin/prime-agent --print hello
+prime-agent|/fixture/bin/prime-agent --mode json
+prime-agent|/fixture/bin/prime-agent --mode rpc
+CASES
+  while IFS='|' read -r comm args; do
+    got=$(fm_test_prime_eval "$dir/home" "$fakebin" '"$0/bin/fm-harness.sh"' \
+      "FM_TEST_PRIME_COMM=$comm" "FM_TEST_PRIME_ARGS=$args")
+    [ "$got" = unknown ] || fail "non-agent '$comm' / '$args' detected as primary '$got'"
+  done <<'CASES'
+prime-agent|/fixture/bin/prime-agent --mode daemon
+pa-daemon|/fixture/bin/pa-daemon supervisor
+prime-agent-rust|/fixture/bin/prime-agent-rust worker
+pa-cli|/fixture/bin/pa-cli worker
+pa-tui-replay|/fixture/bin/pa-tui-replay worker
+prime-agent-helper|/fixture/bin/prime-agent-helper worker
+python3|/fixture/bin/python3 -m rlm.repl prime-agent worker
+node|/fixture/bin/node /fixture/prime-agent/tool.js
+sh|/bin/sh -c prime-agent
+/fixture/prime-agent/runner|/fixture/prime-agent/runner worker
+CASES
+  pass "Prime primary detection uses exact native process roles, not inherited foreign markers"
+}
+
+test_prime_primary_never_defaults_to_unsupported_workers() {
+  local dir fakebin home verb config got rc
+  dir="$TMP_ROOT/prime-dispatch"
+  home="$dir/home"
+  fakebin=$(fm_fakebin "$dir")
+  fm_test_prime_ps "$fakebin"
+  mkdir -p "$home/config"
+  for config in absent default prime-agent; do
+    rm -f "$home/config/crew-harness" "$home/config/secondmate-harness"
+    if [ "$config" != absent ]; then
+      printf '%s\n' "$config" > "$home/config/crew-harness"
+      printf '%s\n' "$config" > "$home/config/secondmate-harness"
+    fi
+    for verb in crew secondmate; do
+      rc=0
+      got=$(fm_test_prime_eval "$home" "$fakebin" \
+        "\"\$0/bin/fm-harness.sh\" $verb" 2>"$dir/stderr") || rc=$?
+      expect_code 2 "$rc" "Prime primary selected an unsupported $verb adapter for $config config"
+      [ -z "$got" ] || fail "unsupported Prime $verb resolution published '$got'"
+      assert_contains "$(cat "$dir/stderr")" "primary-only" \
+        "Prime $verb refusal did not explain primary-only support"
+    done
+  done
+  printf 'codex\n' > "$home/config/crew-harness"
+  rm -f "$home/config/secondmate-harness"
+  for verb in crew secondmate; do
+    got=$(fm_test_prime_eval "$home" "$fakebin" "\"\$0/bin/fm-harness.sh\" $verb") \
+      || fail "Prime primary refused explicit supported $verb config"
+    [ "$got" = codex ] || fail "Prime primary resolved supported $verb as '$got', expected codex"
+  done
+  printf 'pi-signed\n' > "$home/config/secondmate-harness"
+  got=$(fm_test_prime_eval "$home" "$fakebin" '"$0/bin/fm-harness.sh" secondmate')
+  [ "$got" = pi-signed ] || fail "Prime primary ignored explicit supported secondmate config: $got"
+  pass "Prime primary requires supported crew/secondmate choices and honors explicit verified adapters"
+}
+
+test_prime_primary_identity_outranks_retained_markers
+test_prime_primary_never_defaults_to_unsupported_workers
+[ "${1:-}" != --prime-only ] || exit 0
 test_markerless_ancestry_outranks_foreign_marker
 test_genuine_marker_and_ancestry_agree
 test_cursor_ordering_still_decides_when_ancestry_is_silent

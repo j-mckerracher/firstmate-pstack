@@ -29,6 +29,9 @@ unset _FM_AGENT_PROCESS_LIB_DIR
 # about what a given name means.
 fm_agent_process_classify_name() {  # <path> [argv0] -> agent|shell|other
   local path=$1 argv0=${2:-} base
+  case "${path##*/}:${argv0##*/}" in
+    prime-agent:*|pa-daemon:*|*:prime-agent|*:pa-daemon) printf 'other'; return 0 ;;
+  esac
   base=${path##*/}
   base=${base#-}
   case "$base" in
@@ -86,10 +89,21 @@ fm_agent_process_classify_name() {  # <path> [argv0] -> agent|shell|other
 #            path, whichever the launcher used (empty when unknown).
 #   <args>   the flattened command line, read only for the node-bundle
 #            harnesses whose identity sits in argv[1] (bin/fm-gemini-lib.sh).
-#   [pid]    when given, lets the Gemini rule read argv boundaries from the
-#            live process instead of the flattened line.
-fm_agent_process_classify() {  # <name> <argv0> <args> [pid] -> agent|shell|other
+#   [pid]    when given, lets the process rules read argv boundaries instead of
+#            the flattened line. Optional structured argv follows this field.
+fm_agent_process_classify() {  # <name> <argv0> <args> [pid] [argv...] -> agent|shell|other
   local name=${1:-} argv0=${2:-} args=${3:-} pid=${4:-} by_name by_argv0
+  case "${name##*/}" in
+    prime-agent|pa-daemon)
+      if { [ "$#" -gt 4 ] && _fm_prime_argv_matches "$name" "${@:5}"; } \
+        || { [ "$#" -le 4 ] && fm_prime_process_matches "$name" "$args" "$argv0" "$pid"; }; then
+        printf 'agent'
+      else
+        printf 'other'
+      fi
+      return 0
+      ;;
+  esac
   by_name=$(fm_agent_process_classify_name "$name" "$argv0")
   [ "$by_name" != agent ] || { printf 'agent'; return 0; }
   if [ -n "$argv0" ]; then

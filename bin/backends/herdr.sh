@@ -2131,7 +2131,8 @@ fm_backend_herdr_pane_process_state() {  # <session> <pane_id>
 # the settle retry.
 fm_backend_herdr_pane_process_state_sample() {  # <session> <pane_id>
   local session=$1 pane_id=$2 info shell_pid count i pid name argv0 args verdict
-  local others=0 ps_bin rows
+  local others=0 ps_bin rows token
+  local -a process_argv=()
   info=$(fm_backend_herdr_cli "$session" pane process-info --pane "$pane_id" 2>/dev/null) \
     || { printf 'unreadable'; return 0; }
   printf '%s' "$info" | jq -e --arg pane "$pane_id" '
@@ -2156,7 +2157,19 @@ fm_backend_herdr_pane_process_state_sample() {  # <session> <pane_id>
     args=$(printf '%s' "$info" | jq -r --argjson i "$i" '
       .result.process_info.foreground_processes[$i] as $p
       | $p.cmdline // (($p.argv // []) | join(" ")) // empty' 2>/dev/null)
-    verdict=$(fm_agent_process_classify "$name" "$argv0" "$args" "$pid")
+    process_argv=()
+    case "${name##*/}" in
+      prime-agent|pa-daemon)
+        while IFS= read -r -d '' token; do
+          process_argv+=("$token")
+        done < <(printf '%s' "$info" | jq -j --argjson i "$i" '
+          .result.process_info.foreground_processes[$i].argv
+          | select(type == "array")
+          | select(all(.[]; type == "string" and (contains("\u0000") | not)))
+          | .[] | ., "\u0000"' 2>/dev/null)
+        ;;
+    esac
+    verdict=$(fm_agent_process_classify "$name" "$argv0" "$args" "$pid" ${process_argv[@]+"${process_argv[@]}"})
     case "$verdict" in
       agent) printf 'agent'; return 0 ;;
       shell) ;;
@@ -2178,13 +2191,20 @@ fm_backend_herdr_pane_process_state_sample() {  # <session> <pane_id>
     || { printf 'unreadable'; return 0; }
   while IFS=$'\t' read -r pid name; do
     [ -n "$pid" ] || continue
-    args=$(LC_ALL=C "$ps_bin" -p "$pid" -o args= 2>/dev/null) || continue
+    args=$(LC_ALL=C "$ps_bin" -p "$pid" -o args= 2>/dev/null) || {
+      case "${name##*/}" in
+        prime-agent|pa-daemon) args= ;;
+        *) continue ;;
+      esac
+    }
     args=${args#"${args%%[![:space:]]*}"}
     argv0=${args%%[[:space:]]*}
-    if [ "$(fm_agent_process_classify "$name" "$argv0" "$args" "$pid")" = agent ]; then
+    verdict=$(fm_agent_process_classify "$name" "$argv0" "$args" "$pid")
+    if [ "$verdict" = agent ]; then
       printf 'agent'
       return 0
     fi
+    case "${name##*/}" in prime-agent|pa-daemon) others=$((others + 1)) ;; esac
   done <<EOF
 $(printf '%s\n' "$rows" | awk -v shell="$shell_pid" '
   {
@@ -2207,6 +2227,7 @@ $(printf '%s\n' "$rows" | awk -v shell="$shell_pid" '
     }
   }')
 EOF
+  [ "$others" -eq 0 ] || { printf 'other'; return 0; }
   printf 'shell'
 }
 

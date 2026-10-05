@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|devin|prime-agent|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
-#                                        (config/crew-harness; "default" resolves to own)
+#                                        (config/crew-harness; "default" resolves to own,
+#                                        except primary-only Prime requires a verified
+#                                        worker adapter configured explicitly)
 #        fm-harness.sh crew-model       print the optional MODEL token from
 #                                        config/crew-harness, or empty when absent.
 #        fm-harness.sh crew-effort      print the optional EFFORT token from
@@ -79,8 +81,8 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
-# shellcheck source=bin/fm-cursor-lib.sh
-. "$SCRIPT_DIR/fm-cursor-lib.sh"
+# shellcheck source=bin/fm-session-lock-lib.sh
+. "$SCRIPT_DIR/fm-session-lock-lib.sh"
 # shellcheck source=bin/fm-gemini-lib.sh
 . "$SCRIPT_DIR/fm-gemini-lib.sh"
 
@@ -187,6 +189,13 @@ ancestry_names_omp() {
 harness_process_verdict() {  # <pid>
   local pid=$1 comm args argv0
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 0
+  case "${comm##*/}" in
+    prime-agent|pa-daemon)
+      args=$(ps -o args= -p "$pid" 2>/dev/null) || return 0
+      fm_prime_process_matches "$comm" "$args" '' "$pid" && echo "comm prime-agent"
+      return 0
+      ;;
+  esac
   argv0=$(fm_cursor_argv0_for_pid "$pid" "$comm" 2>/dev/null || true)
   if fm_cursor_process_matches "$comm" '' "$argv0"; then
     echo "comm cursor"
@@ -494,11 +503,20 @@ pinned_field() {  # <name> <idx>
 }
 
 # Resolve the effective crewmate harness: the harness token of config/crew-harness
-# wins; absent or "default" mirrors firstmate's own harness.
+# wins; absent or "default" mirrors firstmate's own dispatchable harness.
+require_dispatchable_harness() {  # <harness> <config-name>
+  if [ "$1" = prime-agent ]; then
+    echo "error: prime-agent is primary-only, not a crew or secondmate adapter; configure config/$2 with a verified worker harness" >&2
+    return 2
+  fi
+}
+
 resolve_crew() {
   local crew
   crew=$(config_field crew-harness 1)
-  if [ -z "$crew" ] || [ "$crew" = "default" ]; then detect_own; else echo "$crew"; fi
+  if [ -z "$crew" ] || [ "$crew" = "default" ]; then crew=$(detect_own) || return; fi
+  require_dispatchable_harness "$crew" crew-harness || return
+  echo "$crew"
 }
 
 # Resolve the harness the PRIMARY uses to launch SECONDMATE agents: a fallback
@@ -510,7 +528,8 @@ resolve_crew() {
 resolve_secondmate() {
   local sm
   sm=$(config_field secondmate-harness 1)
-  if [ -z "$sm" ] || [ "$sm" = "default" ]; then sm=$(resolve_crew) || exit; fi
+  if [ -z "$sm" ] || [ "$sm" = "default" ]; then sm=$(resolve_crew) || return; fi
+  require_dispatchable_harness "$sm" secondmate-harness || return
   echo "$sm"
 }
 

@@ -20,6 +20,8 @@ TMP_ROOT=$(fm_test_tmproot fm-session-lock-ancestry)
 fm_git_identity fmtest fmtest@example.invalid
 
 LIB="$ROOT/bin/fm-session-lock-lib.sh"
+# shellcheck source=tests/prime-process-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/prime-process-helpers.sh"
 
 # Claude Code's native installer names the per-session executable by its version,
 # so the harness identity has to survive a basename that says nothing.
@@ -1099,6 +1101,158 @@ test_verified_reclaim_keeps_new_sidecar() {
   pass "session-lock: a verified reclaim keeps the new sidecar beside the new pid"
 }
 
+test_prime_native_process_roles() {
+  local dir fakebin comm args expected got
+  dir="$TMP_ROOT/prime-roles"
+  fakebin=$(fm_fakebin "$dir")
+  fm_test_prime_ps "$fakebin"
+  while IFS='|' read -r comm args expected; do
+    got=$(fm_test_prime_eval "$dir/home" "$fakebin" '
+      . "$0/bin/fm-session-lock-lib.sh"
+      if fm_harness_process_matches "$FM_TEST_PRIME_COMM" "$FM_TEST_PRIME_ARGS"; then
+        printf recognized
+      else
+        printf rejected
+      fi
+    ' "FM_TEST_PRIME_COMM=$comm" "FM_TEST_PRIME_ARGS=$args")
+    [ "$got" = "$expected" ] \
+      || fail "Prime identity '$comm' / '$args': got '$got', expected '$expected'"
+  done <<'CASES'
+prime-agent|/fixture/bin/prime-agent worker|recognized
+/fixture/share/prime-agent/prime-agent|/fixture/share/prime-agent/prime-agent worker|recognized
+prime-agent|/fixture/bin/prime-agent --print hello|recognized
+prime-agent|/fixture/bin/prime-agent --mode json|recognized
+prime-agent|/fixture/bin/prime-agent --mode rpc|recognized
+pa-daemon|/fixture/bin/pa-daemon worker|recognized
+/fixture/bin/pa-daemon|/fixture/bin/pa-daemon worker|recognized
+prime-agent|/fixture/bin/prime-agent --mode daemon --daemon-socket /fixture/sock|rejected
+prime-agent|/fixture/bin/prime-agent --mode=daemon|rejected
+pa-daemon|/fixture/bin/pa-daemon supervisor --socket /fixture/sock|rejected
+pa-daemon|/fixture/bin/pa-daemon|rejected
+prime-agent-rust|/fixture/bin/prime-agent-rust worker|rejected
+pa-cli|/fixture/bin/pa-cli worker|rejected
+pa-tui-replay|/fixture/bin/pa-tui-replay worker|rejected
+prime-agent-helper|/fixture/bin/prime-agent-helper worker|rejected
+python3|/fixture/bin/python3 -m rlm.repl prime-agent worker|rejected
+node|/fixture/bin/node /fixture/prime-agent/tool.js worker|rejected
+sh|/bin/sh -c prime-agent worker|rejected
+/fixture/prime-agent/python3|/fixture/prime-agent/python3 worker|rejected
+/fixture/prime-agent/runner|/fixture/prime-agent/runner worker|rejected
+prime-agent||rejected
+prime-agent|/bin/node worker|rejected
+CASES
+  pass "session-lock: exact native Prime CLI/worker identities exclude supervisors and lookalikes"
+}
+
+test_prime_tool_ancestry_anchors_nearest_worker() {
+  local dir fakebin comm args got chain
+  dir="$TMP_ROOT/prime-ancestry"
+  fakebin=$(fm_fakebin "$dir")
+  fm_test_prime_ps "$fakebin"
+  while IFS='|' read -r comm args; do
+    got=$(fm_test_prime_eval "$dir/home" "$fakebin" '
+      . "$0/bin/fm-session-lock-lib.sh"
+      fm_harness_ancestry_pids
+      fm_session_lock_anchor_pid
+      fm_harness_pid_alive 700 || exit 1
+      ! fm_harness_pid_alive 800
+    ' "FM_TEST_PRIME_COMM=$comm" "FM_TEST_PRIME_ARGS=$args") \
+      || fail "Prime tool ancestry did not recognize '$comm' / '$args'"
+    [ "$got" = $'700\n700' ] \
+      || fail "Prime tool ancestry anchored '$got', expected only nearest worker 700, never supervisor 800"
+  done <<'CASES'
+prime-agent|/fixture/bin/prime-agent worker
+/fixture/share/prime-agent/prime-agent|/fixture/share/prime-agent/prime-agent worker
+pa-daemon|/fixture/bin/pa-daemon worker
+prime-agent|/fixture/bin/prime-agent --print hello
+prime-agent|/fixture/bin/prime-agent --mode json
+prime-agent|/fixture/bin/prime-agent --mode rpc
+CASES
+  for chain in detached missing malformed ambiguous cycle; do
+    if fm_test_prime_eval "$dir/home" "$fakebin" '
+      . "$0/bin/fm-session-lock-lib.sh"
+      fm_session_lock_anchor_pid
+    ' "FM_TEST_PRIME_CHAIN=$chain" >/dev/null 2>&1; then
+      fail "$chain Prime ancestry supplied an unverified anchor"
+    fi
+  done
+  pass "session-lock: Prime tools traverse Python/shell to the nearest worker and reject broken ancestry"
+}
+
+test_prime_lock_acquire_reentry_and_owner_safety() {
+  local dir fakebin out rc chain
+  dir="$TMP_ROOT/prime-lock"
+  fakebin=$(fm_fakebin "$dir")
+  fm_test_prime_ps "$fakebin"
+  out=$(fm_test_prime_eval "$dir/home" "$fakebin" '. "$0/bin/fm-lock.sh"') \
+    || fail "Prime could not acquire its isolated home: $out"
+  assert_contains "$out" "lock acquired: harness pid 700" "Prime lock did not name its worker"
+  [ "$(cat "$dir/home/state/.lock")" = 700 ] || fail "Prime published its supervisor instead of its worker"
+  cp "$dir/home/state/.lock" "$dir/lock-before"
+  printf 'inherited-claude-session\n' > "$dir/home/state/.lock-session"
+  out=$(fm_test_prime_eval "$dir/home" "$fakebin" '. "$0/bin/fm-lock.sh"' \
+    CLAUDECODE=1 CLAUDE_PID=700 CLAUDE_CODE_SESSION_ID=inherited-claude-session) \
+    || fail "Prime could not reenter its own lock: $out"
+  cmp -s "$dir/lock-before" "$dir/home/state/.lock" || fail "Prime reentry changed its recorded anchor"
+  [ ! -e "$dir/home/state/.lock-session" ] || fail "Prime invented a Claude trusted-session sidecar"
+
+  printf '900\n' > "$dir/home/state/.lock"
+  printf 'foreign-fixture-session\n' > "$dir/home/state/.lock-session"
+  cp "$dir/home/state/.lock" "$dir/lock-before"
+  cp "$dir/home/state/.lock-session" "$dir/session-before"
+  rc=0
+  out=$(fm_test_prime_eval "$dir/home" "$fakebin" '. "$0/bin/fm-lock.sh"' \
+    CLAUDECODE=1 CLAUDE_PID=900 CLAUDE_CODE_SESSION_ID=foreign-fixture-session 2>&1) || rc=$?
+  expect_code 1 "$rc" "Prime stole a competing live worker's lock"
+  assert_contains "$out" "another live firstmate session holds the lock (pid 900, session foreign-fixture-session)" \
+    "Prime did not reach the distinct live-owner refusal"
+  cmp -s "$dir/lock-before" "$dir/home/state/.lock" || fail "Prime changed the competing live owner's anchor"
+  cmp -s "$dir/session-before" "$dir/home/state/.lock-session" || fail "Prime changed the competing owner's sidecar"
+  [ ! -e "$dir/home/state/.lock.acquire" ] || fail "Prime refusal leaked a claim lock"
+
+  out=$(fm_test_prime_eval "$dir/home" "$fakebin" '. "$0/bin/fm-lock.sh"' FM_TEST_PRIME_DEAD_PID=900) \
+    || fail "Prime did not reclaim a provably dead owner using existing semantics: $out"
+  [ "$(cat "$dir/home/state/.lock")" = 700 ] || fail "Prime stale reclaim did not publish its own worker"
+  [ ! -e "$dir/home/state/.lock-session" ] || fail "Prime stale reclaim retained an untrusted sidecar"
+  printf '900\n' > "$dir/home/state/.lock"
+  printf 'previous-session\n' > "$dir/home/state/.lock-session"
+  out=$(fm_test_prime_eval "$dir/home" "$fakebin" '. "$0/bin/fm-lock.sh"' \
+    FM_TEST_PRIME_OWNER_COMM=python3 'FM_TEST_PRIME_OWNER_ARGS=/fixture/bin/python3 unrelated.py') \
+    || fail "Prime did not reclaim a reused non-harness owner using existing semantics: $out"
+  [ "$(cat "$dir/home/state/.lock")" = 700 ] || fail "Prime reused-PID reclaim did not publish its worker"
+  [ ! -e "$dir/home/state/.lock-session" ] || fail "Prime reused-PID reclaim retained an old sidecar"
+
+  for chain in detached missing malformed ambiguous cycle; do
+    printf '900\n' > "$dir/home/state/.lock"
+    printf 'foreign-fixture-session\n' > "$dir/home/state/.lock-session"
+    : > "$dir/trace"
+    rc=0
+    out=$(fm_test_prime_eval "$dir/home" "$fakebin" '. "$0/bin/fm-lock.sh"' \
+      "FM_TEST_PRIME_CHAIN=$chain" "FM_TEST_PRIME_TRACE=$dir/trace" \
+      CLAUDECODE=1 CLAUDE_PID=900 CLAUDE_CODE_SESSION_ID=foreign-fixture-session 2>&1) || rc=$?
+    expect_code 1 "$rc" "$chain Prime ancestry acquired a lock"
+    [ "$out" = "error: cannot locate harness process in ancestry" ] \
+      || fail "$chain Prime ancestry lost the exact guard diagnostic: $out"
+    cmp -s "$dir/lock-before" "$dir/home/state/.lock" || fail "$chain ancestry changed the owner"
+    cmp -s "$dir/session-before" "$dir/home/state/.lock-session" || fail "$chain ancestry changed the sidecar"
+    ! grep -q '^900' "$dir/trace" || fail "$chain ancestry consulted an owner before proving its own anchor"
+    [ ! -e "$dir/home/state/.lock.acquire" ] || fail "$chain ancestry created a claim lock"
+  done
+  rm -f "$dir/home/state/.lock"
+  ln -s "$dir/lock-before" "$dir/home/state/.lock"
+  rc=0
+  out=$(fm_test_prime_eval "$dir/home" "$fakebin" '. "$0/bin/fm-lock.sh"' 2>&1) || rc=$?
+  expect_code 1 "$rc" "Prime accepted a nonregular lock"
+  assert_contains "$out" "session lock is not a regular file" "Prime lost the nonregular-lock refusal"
+  [ -L "$dir/home/state/.lock" ] || fail "Prime replaced a symlinked lock"
+  cmp -s "$dir/session-before" "$dir/home/state/.lock-session" || fail "Prime malformed-lock refusal changed the sidecar"
+  pass "session-lock: Prime acquire/reentry and stale reclaim preserve live-owner and malformed-input safety"
+}
+
+test_prime_native_process_roles
+test_prime_tool_ancestry_anchors_nearest_worker
+test_prime_lock_acquire_reentry_and_owner_safety
+[ "${1:-}" != --prime-only ] || exit 0
 test_version_named_session_is_identified_on_both_platforms
 test_harness_at_namespace_pid1_is_examined
 test_ordinary_paths_are_never_harness_processes
