@@ -365,10 +365,32 @@ There is no pull request, no \`gh-axi\` call, and no forge CI result to report: 
 EOF
 }
 
-fm_dod_block() {  # <mode> <task-id> [branch] [<forge>]
-  local mode=$1 id=$2 forge=${4:-none}
+# Implementation resources are read explicitly, never registered as global skills.
+# Both new ships and promoted scouts receive this contract before their DOD.
+fm_pstack_implementation_block() {
+  local resources
+  resources="$(cd "$(dirname "${BASH_SOURCE[0]}")/../vendor/pstack" && pwd -P)" || return 1
+  cat <<EOF
+# Implementation workflow
+Before investigating, designing, or changing this task, read \`$resources/skills/poteto-mode/SKILL.md\` in full and use poteto-mode for the implementation phase.
+Use file-reading tools; no installed slash command or plugin is required. Resolve every routed pstack skill against \`$resources/skills/<skill>/SKILL.md\` and playbooks/resources relative to their referring file, never a same-named global skill.
+Read the matched playbook and applicable principle and helper leaf files before applying them. Copy its steps into your task checklist, retaining a reason for each deferred or inapplicable step. Use the relevant pstack skills as the work calls for them, not every skill indiscriminately.
+Firstmate's role, authority, worktree, delegation, and delivery rules override the upstream instructions. Do not run setup-pstack or alter user-global settings. Keep decisions on Firstmate's existing status channel.
+Implement the requested behavior, including regression tests and documentation required by the task, using proportionate reproduction and direct surface checks to guide and prove the change, then commit the candidate on this task's ship branch. Record the selected playbook, leaf files read, commands and observed results, and any missing proof in this task's existing notes or handoff; reading a skill alone is not evidence the change works.
+Defer upstream formal review, full-suite test, lint, documentation-review, rebase, PR, CI, babysitting, shipping, autopilot, and orchestration gates to the existing delivery contract; this does not defer tests, documentation changes, or direct proof needed to implement the requested behavior. Do not create an additional pre-pipeline validation gate or publish from this phase.
+At the committed handoff, stop the implementation playbook and follow the Definition of done. After Firstmate triggers no-mistakes, drive that single outer run; its children own review, fixes, tests, documentation, lint, rebase, PR, and CI. Never start nested runs or hand-edit around active pipeline findings.
+If these resources cannot be read, report \`blocked [key=pstack-unavailable]: {exact missing path or read refusal}\` to Firstmate and stop before implementation. A restricted scout promoted from an older session may need relaunch with the resource read grant.
+
+EOF
+}
+
+fm_dod_block() {  # <mode> <task-id> [branch] [<forge>] [<workflow>]
+  local mode=$1 id=$2 forge=${4:-none} workflow=${5:-standard}
   local branch=${3:-fm/$id}
   fm_forge_valid_for_mode "$forge" "$mode" fm_dod_block || return 1
+  if [ "$mode" = no-mistakes ] && [ "$workflow" != pstack ]; then
+    fm_pstack_implementation_block || return 1
+  fi
   case "$mode:$forge" in
     direct-PR:gerrit)
       cat <<EOF
@@ -483,7 +505,7 @@ fm_pstack_entry_overlay() {  # <entry> <plugin-dir>
   cat <<EOF
 
 # pstack entry overlay
-This task runs the pstack worker workflow, so load the entry skill now, before any task work, and keep it as your main mode for the whole task: invoke the Skill tool with exactly \`$1\`, loaded from \`$2\`.
+This task runs the pstack worker workflow, so load the entry skill now, before any task work, and keep it as your implementation mode until committed handoff: invoke the Skill tool with exactly \`$1\`, loaded from \`$2\`.
 The Definition of done's \`# Worker workflow\` section tells you what the workflow owns for this task.
 If the entry skill is missing or refuses to load, do not approximate the workflow: report the blocker it names and stop.
 EOF
@@ -522,12 +544,12 @@ EOF
   cat <<EOF
 
 This task runs the pstack worker workflow: you own investigation, implementation, direct proof, and the outer validation lifecycle for this change, and no other agent does.
-Start pstack main mode now, before any task work, using the entry the launch overlay names, and keep it as your main mode until the task ends; pick the proportionate pstack playbook for a change of this size.
+Start pstack main mode now, before any task work, using the entry the launch overlay names, and keep it as your implementation mode until committed handoff; pick the proportionate pstack playbook for a change of this size. Read the matched playbook and applicable leaf skills from this configured plugin, never the bundled resources or same-named global skills. Retain deferred steps with their reasons in your checklist.
 Work from the recorded state of the repository and its verification before changing anything.
 Reproduce the failing behavior or establish the baseline before you change anything, and never call successful compilation reproduction.
 Investigate and design inside this workflow; raise every authority decision - product choices, destructive actions, anything above your implementation authority - with firstmate as a \`needs-decision\` status under rule 6, and stop.
 You may run bounded in-session helper agents for sub-steps inside this worktree only, but you inspect all of their output yourself and you own every claim you make: an assistant's self-report is never proof, and delegating the task itself is still forbidden by the worker role contract above.
-Prove the change on the real surface it ships on, run the adjacent and type and lint and build checks around it, then review your complete diff yourself, adversarially, before you report.
+Prove the change on the real surface it ships on with proportionate implementation checks, recording the commands, results, and any unavailable proof. For no-mistakes delivery, defer full-suite tests and formal review, documentation-review, lint, rebase, PR, and CI gates to the pipeline rather than creating a second validation gate; keep task-required regression tests, documentation changes, and direct proof in implementation. Direct-PR and local-only delivery retain their own verification obligations.
 Then commit the exact proof candidate on your ship branch \`$branch\`, write the proof record with the exact command \`FM_HOME=$home $root/bin/fm-pstack.sh template $id\`, check that record with the exact command \`FM_HOME=$home $root/bin/fm-pstack.sh proof-check $id\`, and only after it passes append the Definition of done's handoff \`done:\` line and stop.
 The proof-check is the deterministic self-check of your record, not a substitute for the proof: it passing means the record is well-formed, so keep every proof section honest.
 EOF
@@ -537,7 +559,7 @@ Your Firstmate contract overrides pstack wherever they disagree: never follow a 
 EOF
   if [ "$mode" = no-mistakes ]; then
     cat <<'EOF'
-While validating, you drive no-mistakes yourself under the Definition of done's contract: you own every `axi run` and `axi respond` call, never hand-edit your work around a gate finding to satisfy it, never start a second run for this task, never pass `--yes` to either tool, and never push - the pipeline is the only publisher.
+At committed handoff, stop the implementation playbook. While validating, no-mistakes children own their assigned review, fix, test, document, lint, rebase, PR, and CI phases; you drive no-mistakes yourself under the Definition of done's contract: you own every `axi run` and `axi respond` call, never hand-edit your work around a gate finding to satisfy it, never start a second run for this task, never pass `--yes` to either tool, and never push - the pipeline is the only publisher.
 When you must invalidate the run's work entirely, abort it with `no-mistakes axi abort`, confirm the finished state with `no-mistakes axi status`, follow `branch_sync.next_action` exactly, rebuild your candidate from the proof record's `base`, write a NEW proof record carrying the superseded candidate's commit sha in its `supersedes` field, re-append the handoff `done:` line, and stop - firstmate re-triggers validation through the gate.
 After the run's outcome arrives, fill the proof record's `## Pipeline outcome` section with the exact outcome label, the risk level if it printed one, every fix it made, any overrides or skips with your reasons, and what remains uncertain, before the Definition of done's ready line; report those same facts honestly in that ready report.
 EOF

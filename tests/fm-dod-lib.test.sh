@@ -21,6 +21,49 @@ write_merge_marker() {  # <state> <id> <provider> <host> <path> <number>
   chmod 600 "$1/$2.pr-poll-merge-notified"
 }
 
+# Generated delivery text is the worker interface; these checks prove delivery,
+# not that a model obeyed it. The manifest checks the shipped resource bytes.
+test_no_mistakes_implementation_resources() {
+  local out="$TMP_ROOT/implementation.md" entry
+  fm_dod_block no-mistakes impl fm/impl none > "$out"
+  # shellcheck disable=SC2016 # Literal backticks delimit the emitted path.
+  entry=$(sed -n 's/^Before investigating.*read `\([^`]*\)` in full.*/\1/p' "$out")
+  [ -r "$entry" ] || fail "emitted implementation entry is not readable: $entry"
+  assert_equals "$(cd "$ROOT/vendor/pstack" && pwd -P)/skills/poteto-mode/SKILL.md" "$entry" \
+    "standard ship must select pinned resources"
+  [ "$(sed -n '/^# Implementation workflow/=' "$out")" -lt "$(sed -n '/^# Definition of done/=' "$out")" ] \
+    || fail "implementation instructions must precede delivery handoff"
+  assert_grep 'stop the implementation playbook' "$out" "pipeline boundary missing"
+  assert_grep 'never a same-named global skill' "$out" "leaf namespace missing"
+  assert_grep 'including regression tests and documentation required by the task' "$out" "implementation correctness work was deferred"
+  fm_dod_block no-mistakes impl fm/impl none pstack > "$out"
+  assert_no_grep '# Implementation workflow' "$out" "configured plugin must not also load pinned mode"
+  fm_dod_block direct-PR impl > "$out"
+  assert_no_grep '# Implementation workflow' "$out" "direct-PR default changed"
+  fm_dod_block local-only impl > "$out"
+  assert_no_grep '# Implementation workflow' "$out" "local-only default changed"
+  if ! python3 - "$ROOT/vendor/pstack" <<'PYRESOURCE'
+import hashlib
+import json
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+manifest = json.loads((root / 'UPSTREAM.json').read_text())
+assert len(manifest['revision']) == 40
+assert manifest['repository'] == 'https://github.com/backnotprop/pstack'
+for name, expected in manifest['files_sha256'].items():
+    assert hashlib.sha256((root / name).read_bytes()).hexdigest() == expected, name
+for name in ['poteto-mode/playbooks/bug-fix.md', 'poteto-mode/playbooks/feature.md',
+             'principle-prove-it-works/SKILL.md', 'tdd/SKILL.md']:
+    assert (root / 'skills' / name).is_file(), name
+assert 'LICENSE' in manifest['files_sha256']
+PYRESOURCE
+  then
+    fail "pinned pstack resources are incomplete or modified"
+  fi
+  pass "no-mistakes emits a readable pinned implementation contract without mixing plugin versions"
+}
+
 test_scout_done_is_not_gated() {
   local repo wt
   repo="$TMP_ROOT/scout-repo"
@@ -461,6 +504,7 @@ test_pstack_entry_overlay_names_the_skill() {
   pass "entry overlay names the exact skill load and the blocking rule"
 }
 
+test_no_mistakes_implementation_resources
 test_scout_done_is_not_gated
 test_unpushed_ship_done_is_refused
 test_no_mistakes_prevalidation_done_is_not_gated

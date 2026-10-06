@@ -381,7 +381,7 @@ ROWS
 
   # A gerrit project refuses pstack before anything is written, naming the forge
   # it cannot carry.
-  local gerrit_home gerrit_meta
+  local gerrit_home
   gerrit_home="$TMP_ROOT/promote-wf-gerrit/home"
   mkdir -p "$gerrit_home/state" "$gerrit_home/config" "$gerrit_home/data" "$gerrit_home/projects/proj"
   plugin_dir=$(pstack_write_plugin "$gerrit_home/config/pstack-plugin-root")
@@ -500,6 +500,9 @@ STUB
   done
 
   payload="$TMP_ROOT/promote-dod/payload-promote-dod-no-mistakes"
+  assert_grep "$(cd "$ROOT/vendor/pstack" && pwd -P)/skills/poteto-mode/SKILL.md" "$payload" \
+    "promoted standard ship omitted the readable pinned mode"
+  assert_grep "stop the implementation playbook" "$payload" "promoted ship lost phase boundary"
   assert_grep "ask-user findings are never yours to answer: escalate to firstmate" "$payload" \
     "promoted no-mistakes worker did not receive the ask-user escalation rule"
   assert_grep "write only the ask-user findings, verbatim and unparaphrased (id, severity, file, line, description, authority)" "$payload" \

@@ -1786,7 +1786,7 @@ claude_worker_add_dirs() {  # <home> <id>
   state_real=$(cd "$1/state" && pwd -P)
   data_real=$(cd "$1/data" && pwd -P)
   root_real=$(cd "$ROOT" && pwd -P)
-  printf '%s ' "--add-dir '$state_real/operational-inbox' --add-dir '$state_real/$2.inbox' --add-dir '$data_real/$2' --add-dir '$root_real/.agents/skills'"
+  printf '%s ' "--add-dir '$state_real/operational-inbox' --add-dir '$state_real/$2.inbox' --add-dir '$data_real/$2' --add-dir '$root_real/.agents/skills' --add-dir '$root_real/vendor/pstack'"
 }
 
 claude_expected_launch() {  # <launch> <home> <id> <permission-flag>
@@ -1868,7 +1868,7 @@ test_claude_worker_launch_covers_task_channel_dirs() {
       printf '%s\n' "$mode" > "$HOME_DIR/config/claude-permission-mode"
       fm_fake_claude_outside_read_gate "$FAKEBIN_DIR"
       reqs="$CASE_DIR/channel-requirements.txt"
-      printf '%s\n' "$HOME_DIR/state/$id.inbox" "$HOME_DIR/data/$id" "$ROOT/.agents/skills" > "$reqs"
+      printf '%s\n' "$HOME_DIR/state/$id.inbox" "$HOME_DIR/data/$id" "$ROOT/.agents/skills" "$ROOT/vendor/pstack/skills/poteto-mode/SKILL.md" > "$reqs"
 
       if [ "$kind" = ship ]; then
         out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")

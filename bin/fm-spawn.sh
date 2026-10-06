@@ -2848,8 +2848,8 @@ json_escape() {
 # brief.md/launch-brief.md/report.md), the steering inbox directory (covers
 # every steer and its handled/ acknowledgement), and the status file itself.
 rovo_config_override_flag() {
-  local effort=$1 data_dir=$2 state_dir=$3 id=$4
-  local data_real state_real agent_json paths_json config_json
+  local effort=$1 data_dir=$2 state_dir=$3 id=$4 code_root=$5 kind=$6
+  local data_real state_real root_real agent_json paths_json config_json
   data_real=$(cd "$data_dir" && pwd -P) || return 1
   state_real=$(cd "$state_dir" && pwd -P) || return 1
   agent_json=
@@ -2860,6 +2860,10 @@ rovo_config_override_flag() {
     "$(json_escape "$data_real/$id")" \
     "$(json_escape "$state_real/$id.inbox")" \
     "$(json_escape "$state_real/$id.status")")
+  if [ "$kind" != secondmate ]; then
+    root_real=$(cd "$code_root/vendor/pstack" && pwd -P) || return 1
+    paths_json="$paths_json,\"$(json_escape "$root_real")\""
+  fi
   config_json="{${agent_json}\"toolPermissions\":{\"allowedExternalPaths\":[$paths_json]}}"
   printf -- '--config-override %s ' "$(shell_quote "$config_json")"
 }
@@ -2875,7 +2879,8 @@ rovo_config_override_flag() {
 # in the PARENT home's state/<id>.inbox, and a ship or scout worker's launch
 # record, steers, and brief live in this home's state/operational-inbox,
 # state/<id>.inbox, and data/<id>, with the code root's .agents/skills named
-# by its definition of done - so every Claude launch, fresh spawn and
+# by its definition of done, plus vendor/pstack's explicit implementation
+# resources (also for scouts that may be promoted) - so every Claude launch, fresh spawn and
 # relaunch, in both permission modes, grants exactly those task-channel
 # directories. Paths resolve the way rovo_config_override_flag resolves them
 # (real paths under the task's home). The state channel dirs are created
@@ -2896,9 +2901,9 @@ claude_add_dirs_flag() {  # <kind> <state-dir> <data-dir> <code-root> <task-id>
   *)
     data_real=$(cd "$data_dir" && pwd -P) || return 1
     root_real=$(cd "$code_root" && pwd -P) || return 1
-    [ -d "$root_real/.agents/skills" ] || return 1
+    [ -d "$root_real/.agents/skills" ] && [ -d "$root_real/vendor/pstack" ] || return 1
     mkdir -p "$state_real/operational-inbox" "$state_real/$id.inbox/handled" "$data_real/$id" || return 1
-    dirs=("$state_real/operational-inbox" "$state_real/$id.inbox" "$data_real/$id" "$root_real/.agents/skills")
+    dirs=("$state_real/operational-inbox" "$state_real/$id.inbox" "$data_real/$id" "$root_real/.agents/skills" "$root_real/vendor/pstack")
     ;;
   esac
   for d in "${dirs[@]}"; do
@@ -5227,7 +5232,7 @@ else
   LAUNCH=${LAUNCH//__CLAUDEATTRIBUTION__/,'"attribution":{"commit":"","pr":"","sessionUrl":false}'}
 fi
 if [ "$HARNESS" = rovo ]; then
-  ROVOCONFIGOVERRIDE=$(rovo_config_override_flag "$EFFORT" "$DATA" "$STATE" "$ID") || {
+  ROVOCONFIGOVERRIDE=$(rovo_config_override_flag "$EFFORT" "$DATA" "$STATE" "$ID" "$FM_ROOT" "$KIND") || {
     echo "error: could not resolve this task's home paths for rovo's allowedExternalPaths grant" >&2
     exit 1
   }

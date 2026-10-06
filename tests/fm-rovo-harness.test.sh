@@ -236,6 +236,8 @@ test_rovo_launch_then_send_is_verified() {
     "rovo launch's allowedExternalPaths grant omitted the steering inbox directory"
   assert_contains "$launch" "$state_real/$id.status" \
     "rovo launch's allowedExternalPaths grant omitted the status file"
+  assert_contains "$launch" "$(cd "$ROOT/vendor/pstack" && pwd -P)" \
+    "rovo launch omitted explicit implementation resources"
   pass "fm-spawn: rovo launches bare, waits for readiness, and delivers its brief pointer"
 }
 

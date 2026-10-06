@@ -674,7 +674,7 @@ case "$MODE" in
     ;;
 esac
 RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$BRANCH" "$FORGE") || exit 1
-DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE") || exit 1
+DOD=$(fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$WORKFLOW") || exit 1
 # A pstack task's obligations render from the same single owner as promotion
 # (fm_pstack_workflow_block), prepended before the Definition of done; a
 # standard brief's DOD stays exactly what fm_dod_block printed.

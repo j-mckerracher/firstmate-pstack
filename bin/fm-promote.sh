@@ -316,7 +316,7 @@ EOF
     fm_pstack_workflow_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$DATA" "$FM_HOME" "$FM_ROOT" || return 1
   fi
   printf '\n'
-  fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE"
+  fm_dod_block "$MODE" "$ID" "$BRANCH" "$FORGE" "$WORKFLOW"
 }
 mkdir -p "$DATA/$ID"
 [ ! -d "$INSTRUCTIONS" ] || { echo "error: ship instructions path is a directory: $INSTRUCTIONS" >&2; exit 1; }

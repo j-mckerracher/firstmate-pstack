@@ -28,7 +28,6 @@ command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 # shellcheck source=tests/pstack-plugin-fixture.sh
 . "$(dirname "${BASH_SOURCE[0]}")/pstack-plugin-fixture.sh"
 
-SPAWN="$ROOT/bin/fm-spawn.sh"
 SEND="$ROOT/bin/fm-send.sh"
 PSTACK="$ROOT/bin/fm-pstack.sh"
 CREW_STATE="$ROOT/bin/fm-crew-state.sh"
@@ -191,7 +190,7 @@ claude_worker_add_dirs() {  # <home> <id>
   state_real=$(cd "$1/state" && pwd -P)
   data_real=$(cd "$1/data" && pwd -P)
   root_real=$(cd "$ROOT" && pwd -P)
-  printf '%s ' "--add-dir '$state_real/operational-inbox' --add-dir '$state_real/$2.inbox' --add-dir '$data_real/$2' --add-dir '$root_real/.agents/skills'"
+  printf '%s ' "--add-dir '$state_real/operational-inbox' --add-dir '$state_real/$2.inbox' --add-dir '$data_real/$2' --add-dir '$root_real/.agents/skills' --add-dir '$root_real/vendor/pstack'"
 }
 
 claude_expected_launch() {  # <launch> <home> <id> <permission-flag>
@@ -216,7 +215,7 @@ test_registry_resolves_and_brief_carries_the_workflow() {
 }
 
 test_spawn_grants_the_plugin_and_overlays_the_entry() {
-  local out status launch meta pdir brieffile
+  local out status launch meta brieffile
   lc_scaffold_brief --workflow pstack
   out=$(lc_run_spawn lc1 "$LC_PROJ" --mode no-mistakes --yolo off --workflow pstack)
   status=$?
@@ -534,6 +533,9 @@ test_standard_spawn_stays_byte_identical_and_leaks_nothing() {
   lc_fill_brief "$home" "$id"
   brief="$home/data/$id/brief.md"
   assert_no_grep 'Worker workflow:' "$brief" "a standard brief carried a workflow marker"
+  assert_grep "$(cd "$ROOT/vendor/pstack" && pwd -P)/skills/poteto-mode/SKILL.md" "$brief" \
+    "standard no-mistakes brief omitted the readable pinned mode"
+  assert_grep "stop the implementation playbook" "$brief" "standard brief lost phase boundary"
   assert_no_grep 'fm-pstack' "$brief" "a standard brief names the pstack tooling"
 
   out=$(FM_FAKE_LAUNCH_LOG="$TMP_ROOT/std/launch.log" \
