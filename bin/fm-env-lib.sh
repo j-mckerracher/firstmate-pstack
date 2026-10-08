@@ -29,3 +29,25 @@ fmx_env_get() {
   esac
   printf '%s' "$val"
 }
+
+# fm_typesafe_local_base <url>
+# True when <url> is an http(s) endpoint on this machine: localhost, 127.0.0.1,
+# or [::1], with any port or path. The typed dispatch resolver and bootstrap
+# treat such a TYPESAFE_BASE_URL as opt-in without an API key, so a local
+# System One-compatible server such as tev1 under Ollama serves dispatch
+# resolution without brief text leaving the machine. Any other host, a
+# userinfo part, or an empty value is not local.
+fm_typesafe_local_base() {
+  local url=$1 host
+  case "$url" in http://*|https://*) ;; *) return 1 ;; esac
+  host=${url#*://}
+  host=${host%%/*}
+  case "$host" in
+    \[*\]*) host=${host%%]*}] ;;
+    *) host=${host%%:*} ;;
+  esac
+  case "$host" in
+    localhost|127.0.0.1|'[::1]') return 0 ;;
+  esac
+  return 1
+}

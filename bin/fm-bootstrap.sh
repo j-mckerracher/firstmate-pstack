@@ -1060,7 +1060,7 @@ crew_dispatch_validate() {
   fi
   typed_key=$TYPESAFE_API_KEY_PRIVATE
   [ -n "$typed_key" ] || typed_key=$(fmx_env_get TYPESAFE_API_KEY "$FM_HOME/.env")
-  [ -z "$typed_key" ] || typed_active=true
+  if [ -n "$typed_key" ] || fm_typesafe_local_base "${TYPESAFE_BASE_URL:-}"; then typed_active=true; fi
   if $typed_active; then
     verified_harnesses=$(fm_control_harnesses | jq -Rsc 'split("\n") | map(select(length > 0))')
   else

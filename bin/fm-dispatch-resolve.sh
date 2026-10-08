@@ -8,13 +8,17 @@
 # Opt-in gate: TYPESAFE_API_KEY non-empty in this process environment, else a
 #   TYPESAFE_API_KEY= line in $FM_HOME/.env read with fmx_env_get, the same
 #   accessor as FMX_PAIRING_TOKEN (bin/fm-env-lib.sh). The environment wins.
-#   Absent in both: one "dispatch-resolve: off" line on stderr, nothing on
+#   Or a TYPESAFE_BASE_URL naming localhost, 127.0.0.1, or [::1], which needs
+#   no key: the local server receives the request with no Authorization header.
+#   Absent both: one "dispatch-resolve: off" line on stderr, nothing on
 #   stdout, exit 0, no network call, so firstmate dispatches exactly as today.
-#   The key lives in one shell variable and reaches curl as a header read from
-#   a file descriptor, never on argv; nothing logs or writes it.
+#   A non-local TYPESAFE_BASE_URL without a key is also off, never an
+#   unauthenticated call. The key lives in one shell variable and reaches curl
+#   as a header read from a file descriptor, never on argv; nothing logs or
+#   writes it.
 #
 # What it does when on with at least one rule: one POST to
-#   https://api.typesafe.ai/v1/systemone with the project name and the brief's
+#   $TYPESAFE_BASE_URL/v1/systemone (default https://api.typesafe.ai) with the project name and the brief's
 #   `## Captain's intent` and `## Firstmate spec` sections, tagged when it is a
 #   scout brief (the whole brief when it has neither section), as state and
 #   ONE Choice question whose options are every rule's `when` from
@@ -63,7 +67,9 @@
 #   actionable, never selected around.
 #
 # Environment:
-#   TYPESAFE_API_KEY is the only resolver-specific environment setting.
+#   TYPESAFE_API_KEY, TYPESAFE_BASE_URL (default https://api.typesafe.ai), and
+#   TYPESAFE_DEFAULT_MODEL (required with a local TYPESAFE_BASE_URL and sent as
+#   the request model; the hosted endpoint always uses jev-latest).
 #
 # Authority: this tool never replaces firstmate's judgment, quota-array-dispatch,
 #   the captain-approval gate, or fm-spawn.sh validation; it publishes one
@@ -91,8 +97,7 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-brief-heading-lib.sh"
 
 CONFIDENCE_FLOOR=0.6
-TS_MODEL=jev-latest
-TS_BASE=https://api.typesafe.ai
+TS_BASE=${TYPESAFE_BASE_URL:-https://api.typesafe.ai}
 TS_TIMEOUT=5
 DEFAULT_WHEN="No listed rule applies to this task."
 
@@ -124,9 +129,17 @@ done
 if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
   TYPESAFE_API_KEY_PRIVATE=$(fmx_env_get TYPESAFE_API_KEY "$FM_HOME/.env")
 fi
-if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
-  echo "dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and $FM_HOME/.env)" >&2
+TS_LOCAL=false
+if fm_typesafe_local_base "$TS_BASE"; then TS_LOCAL=true; fi
+if [ -z "$TYPESAFE_API_KEY_PRIVATE" ] && [ "$TS_LOCAL" = false ]; then
+  echo "dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and $FM_HOME/.env, and TYPESAFE_BASE_URL is not a local endpoint)" >&2
   exit 0
+fi
+if [ "$TS_LOCAL" = true ]; then
+  TS_MODEL=${TYPESAFE_DEFAULT_MODEL:-}
+  [ -n "$TS_MODEL" ] || die "TYPESAFE_DEFAULT_MODEL is required when TYPESAFE_BASE_URL is a local endpoint"
+else
+  TS_MODEL=jev-latest
 fi
 
 # ---- inputs --------------------------------------------------------------------
@@ -325,7 +338,7 @@ command -v curl >/dev/null 2>&1 || emit_error "curl not installed"
   T0=$(fm_timing_now_ms)
   HTTP=$(printf '%s' "$REQUEST" | curl -sS --max-time "$TS_TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
     -X POST "$TS_BASE/v1/systemone" -H 'Content-Type: application/json' \
-    -H @/dev/fd/3 3< <(printf 'Authorization: Bearer %s\n' "$TYPESAFE_API_KEY_PRIVATE") \
+    -H @/dev/fd/3 3< <(if [ -n "$TYPESAFE_API_KEY_PRIVATE" ]; then printf 'Authorization: Bearer %s\n' "$TYPESAFE_API_KEY_PRIVATE"; fi) \
     --data-binary @- 2>/dev/null) || HTTP=000
   T1=$(fm_timing_now_ms)
   LAT_MS=$(( T1 - T0 ))

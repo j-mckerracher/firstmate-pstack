@@ -8,6 +8,8 @@
 # network, and the absent-key case proves the tool makes no call
 # at all.
 set -u
+# Never inherit the caller's typesafe endpoint settings; each case sets its own.
+unset TYPESAFE_BASE_URL TYPESAFE_DEFAULT_MODEL
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -193,6 +195,37 @@ assert_contains "$err" 'dispatch-resolve: off (TYPESAFE_API_KEY absent from the 
 assert_absent "$LOG/argv" "absent key never calls curl"
 assert_absent "$LOG/quota-axi.calls" "absent key never reads quota-axi"
 pass "absent key is off: one stderr line, exit 0, no network call"
+
+# --- local endpoint: no key, model from env, no Authorization header ----------
+LOCAL_BASE=http://localhost:11434
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_BASE_URL=$LOCAL_BASE TYPESAFE_DEFAULT_MODEL=tev1:4b run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "local endpoint without a key resolves"
+assert_contains "$out" '  status: clear' "local endpoint without a key produces a clear result"
+assert_contains "$(cat "$LOG/argv")" "$LOCAL_BASE/v1/systemone" "local endpoint receives the request"
+assert_equals 'tev1:4b' "$(jq -r .model "$LOG/body")" "local endpoint request uses TYPESAFE_DEFAULT_MODEL"
+assert_equals '' "$(cat "$LOG/header")" "local endpoint request carries no Authorization header"
+reset_log
+TYPESAFE_API_KEY=$KEY TYPESAFE_BASE_URL=$LOCAL_BASE TYPESAFE_DEFAULT_MODEL=tev1:4b run code out err "$BRIEF" --project pager
+assert_equals "Authorization: Bearer $KEY" "$(cat "$LOG/header")" "a key with a local endpoint still sends the bearer header"
+reset_log
+TYPESAFE_API_KEY=$KEY TYPESAFE_DEFAULT_MODEL=tev1:4b run code out err "$BRIEF" --project pager
+assert_equals 'jev-latest' "$(jq -r .model "$LOG/body")" "hosted endpoint ignores TYPESAFE_DEFAULT_MODEL"
+assert_contains "$(cat "$LOG/argv")" 'https://api.typesafe.ai/v1/systemone' "hosted endpoint stays the default with a key"
+reset_log
+TYPESAFE_BASE_URL=https://tev1.example.com run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "non-local endpoint without a key exits 0"
+assert_equals '' "$out" "non-local endpoint without a key prints nothing on stdout"
+assert_contains "$err" 'dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and' "non-local endpoint without a key is off"
+assert_absent "$LOG/argv" "non-local endpoint without a key never calls curl"
+assert_absent "$LOG/quota-axi.calls" "non-local endpoint without a key never reads quota-axi"
+reset_log
+TYPESAFE_BASE_URL=$LOCAL_BASE run code out err "$BRIEF" --project pager
+expect_code 2 "$code" "local endpoint without a model is a configuration error"
+assert_contains "$err" 'TYPESAFE_DEFAULT_MODEL is required' "local endpoint without a model names the missing setting"
+assert_absent "$LOG/argv" "local endpoint without a model never calls curl"
+pass "a local TYPESAFE_BASE_URL enables the tool with no key, sends no bearer header, and fails closed without a model"
 
 # --- .env key, and the environment wins over it ------------------------------
 printf '%s\n' '# local secrets' 'FMX_PAIRING_TOKEN=abc' "export TYPESAFE_API_KEY=\"$KEY\"" > "$HOME_DIR/.env"

@@ -22,6 +22,8 @@
 # compatibility handoff that keeps a session start from paying for that verdict
 # twice.
 set -u
+# Never inherit the caller's typesafe endpoint settings; each case sets its own.
+unset TYPESAFE_BASE_URL TYPESAFE_DEFAULT_MODEL
 
 # shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -1109,6 +1111,30 @@ test_crew_dispatch_active_rules_are_verbose_bootstrap_info() {
   pass "bootstrap surfaces active crew-dispatch rules only as verbose BOOTSTRAP_INFO"
 }
 
+test_crew_dispatch_local_endpoint_enables_typed_validation() {
+  local case_dir fakebin body expect out
+  # The provider id is malformed, which typed validation rejects and the
+  # untyped path treats as inert. A local TYPESAFE_BASE_URL with no key turns
+  # typed validation on, so the malformed id is reported.
+  body='{"rules":[{"when":"images","use":[{"harness":"omp","model":"github-copilot/gpt-6-luna","provider":"CLAUDE"}]}]}'
+  case_dir="$TMP_ROOT/dispatch-local-endpoint"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  printf '%s\n' "$body" > "$case_dir/home/config/crew-dispatch.json"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_real_jq "$fakebin"
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "no key and no local endpoint must keep typed validation off, got: $out"
+
+  expect='CREW_DISPATCH: invalid config/crew-dispatch.json - use profile model and effort must be non-empty strings, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\z when present'
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    TYPESAFE_BASE_URL=http://localhost:11434 FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ "$out" = "$expect" ] || fail "local endpoint with no key must enable typed validation: expected '$expect', got: $out"
+  pass "a local TYPESAFE_BASE_URL with no key enables typed dispatch validation"
+}
+
 test_crew_dispatch_validation() {
   local label body expect mode case_dir fakebin out child_env n
   n=0
@@ -1272,3 +1298,4 @@ test_network_phases_record_per_step_elapsed_times
 test_tasks_axi_verdict_handoff_is_consumed_once
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
+test_crew_dispatch_local_endpoint_enables_typed_validation

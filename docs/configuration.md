@@ -1051,6 +1051,37 @@ Per-machine Cursor `cli-config.json` attribution-off is not this contract: it do
 Firstmate chooses the best matching rule with judgment; shell scripts do not match the natural-language rules.
 Firstmate resolves the rule's profile object or array under `AGENTS.md` section 4 and `quota-array-dispatch`, then passes only concrete `--harness`, `--model`, and `--effort` flags to `fm-spawn.sh`.
 
+**Profiles by work class**
+
+The [work-class template](examples/crew-dispatch-work-classes.json) provides eight editable rules using the existing schema.
+The class name is part of each rule's `when` text; there is no separate class field or `--work-class` flag.
+Firstmate infers the class from the task's primary goal, using judgment when a task spans several classes.
+An explicit instruction such as "Use the research class for this task" selects that class instead of the inferred class.
+An explicit per-task harness, model/provider, or effort instruction refines the selected profile and takes precedence for the specified axes under [AGENTS.md section 4](../AGENTS.md#4-harness-and-runtime-dispatch).
+For example, "Use the implementation class for this task, with effort high" keeps that class's harness and model while overriding its effort.
+
+| Class | Primary goal |
+| --- | --- |
+| `debugging` | Troubleshoot, diagnose, or fix a fault, regression, or performance problem. |
+| `implementation` | Add a feature or intentionally change behavior. |
+| `research` | Gather evidence and report findings or recommendations. |
+| `planning` | Produce a design, architecture decision, or implementation plan. |
+| `review` | Review or audit existing work and report findings. |
+| `testing` | Add tests or perform validation as the main deliverable. |
+| `documentation` | Write or revise documentation or explanatory prose. |
+| `maintenance` | Refactor, clean up, or perform routine upkeep while preserving intended behavior. |
+
+Each rule in the template starts with `harness: omp`, `model: github-copilot/gpt-6-luna`, and `effort: max`, so the classes can be configured independently without imposing different model choices.
+These are editable example values, not automatic defaults for every home.
+For a new dispatch file, copy the template to `config/crew-dispatch.json` and set each rule's `use` profile to the desired values.
+For an existing file, merge the class rules into its `rules` array, reconcile any overlapping rules, and preserve its `default` unless changing the fallback is intentional.
+Add or remove classes by editing the rules; unmatched work follows **Model, effort, and fallback behavior** below.
+
+For `omp`, the runtime provider and model are combined in `model` as `<provider>/<model>`, so `github-copilot/gpt-6-luna` selects provider `github-copilot` and model `gpt-6-luna`.
+Change that prefix to select another supported runtime provider, and use a model available through that provider.
+The optional profile `provider` field has a different purpose: it identifies a quota-axi provider family, as described under **Provider identifiers and mappings** below.
+The template omits that quota field for ordinary Firstmate dispatch; when opting in to typed dispatch resolution, add the required, verified quota provider declaration for every `omp` profile, including `default`.
+
 **Spawn requirements**
 
 - When the file exists, `fm-spawn.sh` enforces that contract by refusing crewmate and scout spawns that lack an explicit harness (`--harness`, a positional adapter, or a raw launch command).
@@ -1136,7 +1167,7 @@ This single-provider table is separate from the frozen legacy mapping used by `f
 - An omitted model or effort means the selected harness uses its own default for that axis.
 - OpenCode receives the effort as its default `build` agent's `variant`, keyed to the resolved model, inside the `OPENCODE_CONFIG_CONTENT` JSON its launch already writes (the per-model reasoning-effort field of the config schema, verified on opencode 1.18.32); with no model resolved, the effort is recorded in task metadata but omitted from the launch.
 - Every profile array is an implicit quota-aware choice resolved through `quota-array-dispatch`.
-- If no dispatch rule fits, firstmate resolves `default` through the same object-or-array path before falling back to `config/crew-harness`, passing its harness and any model and effort tokens as explicit flags.
+- If no dispatch rule fits, firstmate resolves `default` through the same object-or-array path before falling back to `config/crew-harness`, passing its harness and any model and effort tokens as explicit flags; if that file is absent or its harness is `default`, the static harness fallback is firstmate's own detected harness.
 - Except for `ultra`, which refuses unsupported profiles under the native-effort contract above, an effort value the chosen harness does not accept is recorded as `effort=` in task meta for traceability but omitted from the launch flags.
 - Bootstrap reports unsupported harness/model/effort combinations as a `CREW_DISPATCH` diagnostic when they are visible in the file.
 
@@ -1158,7 +1189,13 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 ## Typed dispatch resolution (.env TYPESAFE_API_KEY)
 
 `bin/fm-dispatch-resolve.sh` resolves one concrete crewmate or scout profile from a written brief with typesafe.ai's System One model (Jev), so the rule match that firstmate otherwise reasons out in its own context becomes one short tool turn.
-It is off unless `TYPESAFE_API_KEY` is non-empty in the calling environment or the home's gitignored `.env` holds a `TYPESAFE_API_KEY=` line; the environment wins, matching the Relay and mail-plane contracts, and the Relay accessor in `bin/fm-env-lib.sh` reads the line.
+It is on when `TYPESAFE_API_KEY` is non-empty in the calling environment or the home's gitignored `.env` holds a `TYPESAFE_API_KEY=` line; the environment wins, matching the Relay and mail-plane contracts, and the Relay accessor in `bin/fm-env-lib.sh` reads the line.
+It is also on, with no key, when `TYPESAFE_BASE_URL` names a `localhost`, `127.0.0.1`, or `[::1]` endpoint.
+
+A local endpoint receives the same request at `$TYPESAFE_BASE_URL/v1/systemone` with no `Authorization` header, so a local System One-compatible server such as tev1 under Ollama keeps brief text on this machine.
+Its request model is `TYPESAFE_DEFAULT_MODEL`, which is required with a local endpoint; the hosted endpoint always uses `jev-latest`.
+A non-local `TYPESAFE_BASE_URL` without a key stays off, so no unauthenticated call is ever made.
+Unset `TYPESAFE_BASE_URL` to turn the local path off.
 
 Off means one `dispatch-resolve: off` line on stderr, nothing on stdout, exit 0, and no network call, so firstmate dispatches exactly as it does without the tool.
 This section is the single owner of the tool's operator contract; the script header owns its exact flags and output lines, and "Crew dispatch profiles" above owns the declared rule and profile fields it applies.
@@ -2378,7 +2415,9 @@ FMX_RELAY_URL=https://myfirstmate.io   # optional Relay endpoint override, mainl
 FMX_ENV_FILE=           # optional alternate .env file for direct Relay client invocations; bootstrap still checks $FM_HOME/.env
 FMX_DRY_RUN=            # truthy previews Relay replies and dismissals to state/x-outbox/ without posting or requiring a token
 FMX_X_REPLY_MAX_CHARS=280   # X reply per-message split budget; values below 50 clamp to 50
-TYPESAFE_API_KEY=       # typed dispatch resolution opt-in, from the environment or .env; absent means bin/fm-dispatch-resolve.sh is off (docs/configuration.md "Typed dispatch resolution")
+TYPESAFE_API_KEY=       # typed dispatch resolution opt-in, from the environment or .env; with no local TYPESAFE_BASE_URL, absent means bin/fm-dispatch-resolve.sh is off (docs/configuration.md "Typed dispatch resolution")
+TYPESAFE_BASE_URL=      # optional; a localhost, 127.0.0.1, or [::1] endpoint enables typed dispatch resolution with no key (default https://api.typesafe.ai)
+TYPESAFE_DEFAULT_MODEL= # request model for a local TYPESAFE_BASE_URL, required with one (for example tev1:4b)
 FMX_DISCORD_REPLY_MAX_CHARS=1900   # Discord reply per-message split budget; values below 50 clamp to 50, values above 2000 reset to 1900
 FMX_X_THREAD_MAX=25     # maximum messages in one auto-split reply thread
 FMX_FOLLOWUP_MAX_AGE_SECS=604800   # local window for posting Relay completion follow-ups (7 days)

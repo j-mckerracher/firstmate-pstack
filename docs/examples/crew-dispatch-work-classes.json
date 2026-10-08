@@ -1,0 +1,37 @@
+{
+  "rules": [
+    {
+      "when": "Work class: debugging. Use when the captain explicitly selects the debugging class, or otherwise when the primary goal is troubleshooting, diagnosing, or fixing a fault, regression, or performance problem and no other class is explicitly selected.",
+      "use": { "harness": "omp", "model": "github-copilot/gpt-6-luna", "effort": "max" }
+    },
+    {
+      "when": "Work class: implementation. Use when the captain explicitly selects the implementation class, or otherwise when the primary goal is adding a feature or intentionally changing behavior and no other class is explicitly selected.",
+      "use": { "harness": "omp", "model": "github-copilot/gpt-6-luna", "effort": "max" }
+    },
+    {
+      "when": "Work class: research. Use when the captain explicitly selects the research class, or otherwise when the primary goal is gathering evidence and reporting findings or recommendations and no other class is explicitly selected.",
+      "use": { "harness": "omp", "model": "github-copilot/gpt-6-luna", "effort": "max" }
+    },
+    {
+      "when": "Work class: planning. Use when the captain explicitly selects the planning class, or otherwise when the primary goal is producing a design, architecture decision, or implementation plan and no other class is explicitly selected.",
+      "use": { "harness": "omp", "model": "github-copilot/gpt-6-luna", "effort": "max" }
+    },
+    {
+      "when": "Work class: review. Use when the captain explicitly selects the review class, or otherwise when the primary goal is reviewing or auditing existing work and reporting findings and no other class is explicitly selected.",
+      "use": { "harness": "omp", "model": "github-copilot/gpt-6-luna", "effort": "max" }
+    },
+    {
+      "when": "Work class: testing. Use when the captain explicitly selects the testing class, or otherwise when the primary goal is adding tests or performing validation and no other class is explicitly selected.",
+      "use": { "harness": "omp", "model": "github-copilot/gpt-6-luna", "effort": "max" }
+    },
+    {
+      "when": "Work class: documentation. Use when the captain explicitly selects the documentation class, or otherwise when the primary goal is writing or revising documentation or explanatory prose and no other class is explicitly selected.",
+      "use": { "harness": "omp", "model": "github-copilot/gpt-6-luna", "effort": "max" }
+    },
+    {
+      "when": "Work class: maintenance. Use when the captain explicitly selects the maintenance class, or otherwise when the primary goal is refactoring, cleanup, or routine upkeep that preserves intended behavior and no other class is explicitly selected.",
+      "use": { "harness": "omp", "model": "github-copilot/gpt-6-luna", "effort": "max" }
+    }
+  ],
+  "default": { "harness": "omp", "model": "github-copilot/gpt-6-luna", "effort": "max" }
+}
