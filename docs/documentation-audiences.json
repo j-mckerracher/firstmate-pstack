@@ -583,6 +583,10 @@
     {
       "path": ".agents/skills/validation-supervision/SKILL.md",
       "audience": "agent-runtime"
+    },
+    {
+      "path": "docs/proposals/observability-mods.md",
+      "audience": "maintainer-architecture"
     }
   ]
 }
